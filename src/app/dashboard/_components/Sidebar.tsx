@@ -4,6 +4,8 @@
 
 import clsx from "clsx";
 import {
+  Bell,
+  CircleHelp,
   LogOut,
   Menu,
   X,
@@ -147,6 +149,30 @@ export function Sidebar() {
         </div>
       </nav>
 
+      <div className="px-4 pb-6 lg:hidden">
+        <SectionLabel>RAPIDO</SectionLabel>
+        <div className="space-y-1.5">
+          <a
+            href="/dashboard/notifiche"
+            className="group relative block overflow-hidden rounded-md px-4 py-3 text-white/80 transition-colors hover:cursor-pointer hover:bg-white/10 hover:text-white"
+          >
+            <span className="flex items-center gap-2 text-[13px] font-medium">
+              <Bell className="h-4 w-4" />
+              Notifiche
+            </span>
+          </a>
+          <a
+            href="/dashboard/centro-assistenza"
+            className="group relative block overflow-hidden rounded-md px-4 py-3 text-white/80 transition-colors hover:cursor-pointer hover:bg-white/10 hover:text-white"
+          >
+            <span className="flex items-center gap-2 text-[13px] font-medium">
+              <CircleHelp className="h-4 w-4" />
+              Aiuto
+            </span>
+          </a>
+        </div>
+      </div>
+
       <div className="mt-auto px-4 pb-5">
         <div className="flex items-center justify-between gap-3 rounded-2xl bg-black/15 px-3 py-3 ring-1 ring-white/10">
           <div className="flex min-w-0 items-center gap-3">
@@ -173,7 +199,7 @@ export function Sidebar() {
 
   return (
     <>
-      <div className="fixed left-4 top-4 z-50 lg:hidden">
+      <div className="fixed right-4 top-4 z-50 lg:hidden">
         <button
           type="button"
           onClick={() => setMobileOpen(true)}
@@ -188,7 +214,7 @@ export function Sidebar() {
         <div className="fixed inset-0 z-50 lg:hidden">
           <button
             type="button"
-            className="absolute inset-0 bg-black/40"
+            className="absolute inset-0 bg-black/40 hover:cursor-pointer"
             aria-label="Chiudi menu"
             onClick={() => setMobileOpen(false)}
           />
