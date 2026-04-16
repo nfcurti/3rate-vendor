@@ -161,15 +161,6 @@ export function Sidebar() {
               Notifiche
             </span>
           </a>
-          <a
-            href="/dashboard/centro-assistenza"
-            className="group relative block overflow-hidden rounded-md px-4 py-3 text-white/80 transition-colors hover:cursor-pointer hover:bg-white/10 hover:text-white"
-          >
-            <span className="flex items-center gap-2 text-[13px] font-medium">
-              <CircleHelp className="h-4 w-4" />
-              Aiuto
-            </span>
-          </a>
         </div>
       </div>
 
