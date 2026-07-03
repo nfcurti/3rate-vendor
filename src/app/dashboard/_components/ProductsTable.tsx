@@ -4,12 +4,13 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 export type ProductRow = {
-  status: "ATTIVO" | "ESAURITO";
+  status: "ATTIVO" | "ESAURITO" | "PAUSA";
   tone: "green" | "red";
-  when: [string, string];
+  when: [string, string] | [string];
   name: string;
   asin: string;
   sku: string;
+  imageUrl?: string;
   variants?: string;
   perf: Array<[string, string]>;
   inv: Array<[string, string]>;
@@ -146,13 +147,22 @@ export function ProductsTable({
                   </div>
                   <div className="mt-2 space-y-1 text-[10px] font-semibold text-[#9aa39a]">
                     <div>{row.when[0]}</div>
-                    <div>{row.when[1]}</div>
+                    {row.when[1] ? <div>{row.when[1]}</div> : null}
                   </div>
                 </td>
 
                 <td className="py-6 pr-4 align-top">
                   <div className="flex items-start gap-4">
-                    <div className="h-12 w-12 overflow-hidden rounded-2xl bg-[#f2f4f2] ring-1 ring-black/5" />
+                    <div className="h-12 w-12 overflow-hidden rounded-2xl bg-[#f2f4f2] ring-1 ring-black/5">
+                      {row.imageUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={row.imageUrl}
+                          alt=""
+                          className="h-full w-full object-cover"
+                        />
+                      ) : null}
+                    </div>
                     <div className="min-w-0">
                       <div className="truncate text-[12px] font-semibold text-[#1f2b20]">
                         {row.name}

@@ -3,15 +3,53 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { Eye, Lock, Mail } from "lucide-react";
+import { Eye, EyeOff, Lock, Mail } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { FormEvent, useState } from "react";
+import { businessAuthApi, saveBusinessSession } from "@/lib/business-auth";
 
 export default function Home() {
   const router = useRouter();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [status, setStatus] = useState<{
+    message: string;
+    tone: "error" | "success";
+  } | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  function onSubmit(e: React.FormEvent<HTMLFormElement>) {
+  async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    router.push("/dashboard");
+    setStatus(null);
+
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail || !password) {
+      setStatus({
+        message: "Inserisci email e password.",
+        tone: "error",
+      });
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      const session = await businessAuthApi.login(trimmedEmail, password);
+      saveBusinessSession(session);
+      router.push("/dashboard");
+    } catch (error) {
+      setStatus({
+        message:
+          error instanceof Error
+            ? error.message
+            : "Accesso non riuscito. Riprova.",
+        tone: "error",
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
   }
 
   return (
@@ -104,36 +142,59 @@ export default function Home() {
 
             <form className="mt-6 space-y-4" onSubmit={onSubmit}>
               <div className="space-y-2">
-                <label className="text-[11px] font-semibold text-[#6b746c]">
+                <label
+                  htmlFor="email"
+                  className="text-[11px] font-semibold text-[#6b746c]"
+                >
                   Email
                 </label>
                 <div className="relative">
                   <Mail className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[#9aa39a]" />
                   <input
+                    id="email"
                     type="email"
+                    name="email"
+                    autoComplete="email"
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
                     placeholder="tuo@email.com"
+                    required
                     className="h-11 w-full rounded-xl border border-[#e3e8e3] bg-white pl-11 pr-4 text-sm outline-none focus:border-[#5DBE54] focus:ring-4 focus:ring-[#5DBE54]/15"
                   />
                 </div>
               </div>
 
               <div className="space-y-2">
-                <label className="text-[11px] font-semibold text-[#6b746c]">
+                <label
+                  htmlFor="password"
+                  className="text-[11px] font-semibold text-[#6b746c]"
+                >
                   Password
                 </label>
                 <div className="relative">
                   <Lock className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[#9aa39a]" />
                   <input
-                    type="password"
+                    id="password"
+                    type={showPassword ? "text" : "password"}
+                    name="password"
+                    autoComplete="current-password"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
                     placeholder="••••••••"
+                    required
                     className="h-11 w-full rounded-xl border border-[#e3e8e3] bg-white pl-11 pr-11 text-sm outline-none focus:border-[#5DBE54] focus:ring-4 focus:ring-[#5DBE54]/15"
                   />
                   <button
                     type="button"
+                    onClick={() => setShowPassword((value) => !value)}
                     className="absolute right-3 top-1/2 -translate-y-1/2 rounded-lg p-2 text-[#9aa39a] hover:cursor-pointer hover:bg-black/5"
-                    aria-label="Mostra password"
+                    aria-label={showPassword ? "Nascondi password" : "Mostra password"}
                   >
-                    <Eye className="h-4 w-4" />
+                    {showPassword ? (
+                      <EyeOff className="h-4 w-4" />
+                    ) : (
+                      <Eye className="h-4 w-4" />
+                    )}
                   </button>
                 </div>
 
@@ -145,32 +206,43 @@ export default function Home() {
                     />
                     Ricordami
                   </label>
-                  <a
+                  <Link
                     href="/password-dimenticata"
                     className="w-fit shrink-0 font-semibold text-[#2f6b3c] hover:cursor-pointer hover:underline"
                   >
                     Password dimenticata?
-                  </a>
+                  </Link>
                 </div>
               </div>
 
+              {status && (
+                <p
+                  className={`text-xs font-semibold ${
+                    status.tone === "success" ? "text-[#2f6b3c]" : "text-red-600"
+                  }`}
+                >
+                  {status.message}
+                </p>
+              )}
+
               <button
                 type="submit"
-                className="mt-1 inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#2f5c45] text-sm font-semibold text-white shadow-sm hover:cursor-pointer hover:bg-[#284f3b] active:translate-y-px"
+                disabled={isSubmitting}
+                className="mt-1 inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#2f5c45] text-sm font-semibold text-white shadow-sm hover:cursor-pointer hover:bg-[#284f3b] active:translate-y-px disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Accedi
-                <span aria-hidden>→</span>
+                {isSubmitting ? "Accesso in corso..." : "Accedi"}
+                {!isSubmitting && <span aria-hidden>→</span>}
               </button>
             </form>
 
             <div className="mt-6 text-center text-[10px] text-[#6b746c]">
               Non hai ancora un account?{" "}
-              <a
-                href="#"
+              <Link
+                href="/registrati"
                 className="font-semibold text-[#2f6b3c] hover:cursor-pointer hover:underline"
               >
-                Contattaci ora
-              </a>
+                Registrati ora
+              </Link>
             </div>
           </motion.div>
         </section>

@@ -2,6 +2,7 @@
 
 import {
   ArrowLeft,
+  AlertCircle,
   Banknote,
   Bell,
   Calendar,
@@ -12,6 +13,7 @@ import {
   Download,
   Eye,
   LayoutGrid,
+  Loader2,
   Mail,
   MoreVertical,
   Wallet,
@@ -19,10 +21,34 @@ import {
 } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import clsx from "clsx";
+import {
+  businessInfoApi,
+  ensureBusinessInfoRecord,
+  getBusinessInitials,
+  openingHoursFromApi,
+  openingHoursToApi,
+  saveBusinessProfile,
+  uploadBusinessImage,
+  type ProductCategory,
+  type UiDayHours,
+} from "@/lib/business-info";
+import { formatApiErrorMessage, businessAuthApi, getBusinessAuthToken } from "@/lib/business-auth";
+import {
+  businessStripeApi,
+  maskStripeAccountId,
+  type StripeConnectStatus,
+} from "@/lib/business-stripe";
+import {
+  findRegionByProvinceCode,
+  getProvinceOptionsForRegion,
+  ITALIAN_REGION_OPTIONS,
+  normalizeProvinceCode,
+} from "@/lib/italian-regions";
 import { DashboardHelpMenu } from "../_components/DashboardHelpMenu";
 import { DashboardViewHeader } from "../_components/DashboardViewHeader";
+import { FormDropdown } from "../_components/FormDropdown";
 import { Sidebar } from "../_components/Sidebar";
 import { TimePicker } from "../_components/TimePicker";
 import { ViewTransition } from "../_components/ViewTransition";
@@ -33,8 +59,19 @@ const inputClass =
 const textareaClass =
   "min-h-[120px] w-full resize-y rounded-xl border border-black/10 bg-[#F9FAFB] px-3 py-2.5 text-[12px] text-[#1f2b20] outline-none placeholder:text-[#9aa39a] focus:border-[#214e3a]/35 focus:ring-1 focus:ring-[#214e3a]/20";
 
-function FieldLabel({ children }: { children: React.ReactNode }) {
-  return <div className="mb-1.5 text-[12px] font-semibold text-[#1f2b20]">{children}</div>;
+function FieldLabel({
+  children,
+  required = false,
+}: {
+  children: React.ReactNode;
+  required?: boolean;
+}) {
+  return (
+    <div className="mb-1.5 text-[12px] font-semibold text-[#1f2b20]">
+      {children}
+      {required ? <span className="text-red-600"> *</span> : null}
+    </div>
+  );
 }
 
 function Toggle({
@@ -94,9 +131,7 @@ const DAYS_IT = [
 
 type DayKey = (typeof DAYS_IT)[number]["key"];
 
-type DayHours = { open: boolean; start: string; end: string };
-
-const defaultHours = (): Record<DayKey, DayHours> => ({
+const defaultHours = (): Record<DayKey, UiDayHours> => ({
   lun: { open: true, start: "09:00", end: "18:00" },
   mar: { open: true, start: "09:00", end: "18:00" },
   mer: { open: true, start: "09:00", end: "18:00" },
@@ -106,24 +141,110 @@ const defaultHours = (): Record<DayKey, DayHours> => ({
   dom: { open: false, start: "09:00", end: "18:00" },
 });
 
+const defaultProfileForm = () => ({
+  ragioneSociale: "",
+  partitaIVA: "",
+  codiceFiscale: "",
+  codiceSDI: "",
+  email: "",
+  pec: "",
+  phoneNumber: "",
+  whatsappNumber: "",
+  fullAddress: "",
+  cap: "",
+  city: "",
+  province: "",
+  region: "",
+});
+
+const ADDRESS_FIELDS = ["fullAddress", "cap", "city", "province", "region"] as const;
+
+function hasPartialAddress(form: ReturnType<typeof defaultProfileForm>) {
+  const values = ADDRESS_FIELDS.map((key) => form[key].trim());
+  const filled = values.filter(Boolean).length;
+  return filled > 0 && filled < ADDRESS_FIELDS.length;
+}
+
+function isBlank(value: string) {
+  return value.trim().length === 0;
+}
+
+function isPlaceholder(value: string) {
+  return value.trim() === "-";
+}
+
+function isMissingBusinessField(value: string) {
+  return isBlank(value) || isPlaceholder(value);
+}
+
+function normalizeLoadedField(value: string | undefined | null) {
+  if (!value || isPlaceholder(value)) return "";
+  return value;
+}
+
+const REQUIRED_BUSINESS_FIELDS = [
+  "ragioneSociale",
+  "partitaIVA",
+  "codiceFiscale",
+  "codiceSDI",
+  "email",
+  "phoneNumber",
+] as const;
+
+function hasCompleteAddress(form: ReturnType<typeof defaultProfileForm>) {
+  return ADDRESS_FIELDS.every((key) => !isMissingBusinessField(form[key]));
+}
+
+function hasCompleteBusinessProfile(form: ReturnType<typeof defaultProfileForm>) {
+  return (
+    REQUIRED_BUSINESS_FIELDS.every((key) => !isMissingBusinessField(form[key])) &&
+    hasCompleteAddress(form)
+  );
+}
+
+function getPasswordChecks(password: string) {
+  return {
+    minLength: password.length >= 8,
+    specialChars: /[^A-Za-z0-9]/.test(password),
+    numbers: /\d/.test(password),
+    mixedCase: /[a-z]/.test(password) && /[A-Z]/.test(password),
+  };
+}
+
 export default function ImpostazioniPage() {
+  const avatarInputRef = useRef<HTMLInputElement>(null);
   const [tab, setTab] = useState<(typeof TABS)[number]["id"]>("profilo");
+  const [profileForm, setProfileForm] = useState(defaultProfileForm);
+  const [profilePictureUrl, setProfilePictureUrl] = useState<string | null>(null);
+  const [hasBusinessInfo, setHasBusinessInfo] = useState(false);
+  const [isValidated, setIsValidated] = useState(false);
+  const [profileLoading, setProfileLoading] = useState(true);
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [avatarUploading, setAvatarUploading] = useState(false);
+  const [profileStatus, setProfileStatus] = useState<{
+    message: string;
+    tone: "error" | "success";
+  } | null>(null);
   const [hoursEnabled, setHoursEnabled] = useState(true);
-  const [dayHours, setDayHours] = useState(defaultHours);
-  const [categories, setCategories] = useState<string[]>([
-    "Elettronica",
-    "Smartphone",
-    "Computer",
-    "Accessori",
-  ]);
-  const [categoryDraft, setCategoryDraft] = useState("");
-  const [addingCategory, setAddingCategory] = useState(false);
+  const [dayHours, setDayHours] = useState<Record<DayKey, UiDayHours>>(defaultHours);
+  const [storeDescription, setStoreDescription] = useState("");
+  const [availableCategories, setAvailableCategories] = useState<ProductCategory[]>([]);
+  const [selectedCategoryIds, setSelectedCategoryIds] = useState<string[]>([]);
+  const [categoryLabels, setCategoryLabels] = useState<Record<string, string>>({});
+  const [showCategoryPicker, setShowCategoryPicker] = useState(false);
   const [payoutFrequency, setPayoutFrequency] = useState<"daily" | "weekly" | "monthly">("daily");
   const [minPayout, setMinPayout] = useState("50");
   const [payCards, setPayCards] = useState(true);
   const [payKlarna, setPayKlarna] = useState(true);
   const [paySatispay, setPaySatispay] = useState(true);
   const [payCash, setPayCash] = useState(true);
+  const [stripeConnect, setStripeConnect] = useState<StripeConnectStatus | null>(null);
+  const [stripeLoading, setStripeLoading] = useState(false);
+  const [stripeOnboarding, setStripeOnboarding] = useState(false);
+  const [stripeStatus, setStripeStatus] = useState<{
+    message: string;
+    tone: "error" | "success";
+  } | null>(null);
 
   const [notifEmailChannel, setNotifEmailChannel] = useState(true);
   const [notifOrdineNuovo, setNotifOrdineNuovo] = useState(true);
@@ -139,22 +260,384 @@ export default function ImpostazioniPage() {
 
   const [secProfiloPubblico, setSecProfiloPubblico] = useState(true);
   const [secGeolocalizzazione, setSecGeolocalizzazione] = useState(true);
+  const [showPasswordForm, setShowPasswordForm] = useState(false);
+  const [oldPassword, setOldPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [passwordStatus, setPasswordStatus] = useState<{
+    message: string;
+    tone: "error" | "success";
+  } | null>(null);
+  const [passwordSaving, setPasswordSaving] = useState(false);
 
   const [fattCycle, setFattCycle] = useState<"monthly" | "annual">("monthly");
 
-  function setDay<K extends DayKey>(key: K, patch: Partial<DayHours>) {
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadProfile() {
+      setProfileLoading(true);
+      setProfileStatus(null);
+
+      try {
+        let payload;
+        try {
+          payload = await ensureBusinessInfoRecord();
+        } catch (bootstrapError) {
+          payload = await businessInfoApi.getAccountInfo();
+          if (!payload.info?._id && !cancelled) {
+            setProfileStatus({
+              message: formatApiErrorMessage(bootstrapError),
+              tone: "error",
+            });
+          }
+        }
+
+        if (cancelled || !payload) return;
+
+        const info = payload.info;
+        const account = payload.account;
+
+        setIsValidated(Boolean(account?.isValidated));
+        setHasBusinessInfo(Boolean(info?._id));
+        setProfilePictureUrl(info?.profilePictureUrl ?? null);
+        const loadedProvince = normalizeProvinceCode(normalizeLoadedField(info?.province));
+        const loadedRegion =
+          normalizeLoadedField(info?.region) || findRegionByProvinceCode(loadedProvince) || "";
+
+        setProfileForm({
+          ragioneSociale: normalizeLoadedField(info?.ragioneSociale),
+          partitaIVA: normalizeLoadedField(info?.partitaIVA),
+          codiceFiscale: normalizeLoadedField(info?.codiceFiscale),
+          codiceSDI: normalizeLoadedField(info?.codiceSDI),
+          email: normalizeLoadedField(info?.email) || account?.email || "",
+          pec: normalizeLoadedField(info?.pec),
+          phoneNumber: normalizeLoadedField(info?.phoneNumber),
+          whatsappNumber: normalizeLoadedField(info?.whatsappNumber),
+          fullAddress: normalizeLoadedField(info?.fullAddress),
+          cap: normalizeLoadedField(info?.cap),
+          city: normalizeLoadedField(info?.city),
+          province: loadedProvince,
+          region: loadedRegion,
+        });
+
+        const [storeDescPayload, openingHoursPayload, categoriesPayload] =
+          await Promise.all([
+            businessInfoApi.getStoreDescription(),
+            businessInfoApi.getOpeningHours(),
+            businessInfoApi.getCategories(),
+          ]);
+
+        if (cancelled) return;
+
+        const labels: Record<string, string> = {};
+        categoriesPayload.forEach((category) => {
+          if (category._id && category.name) labels[category._id] = category.name;
+        });
+        storeDescPayload.productCategories?.forEach((category) => {
+          if (category._id && category.name) labels[category._id] = category.name;
+        });
+
+        setStoreDescription(storeDescPayload.storeDescription ?? "");
+        setSelectedCategoryIds(storeDescPayload.productCategoryIds ?? []);
+        setCategoryLabels(labels);
+        setAvailableCategories(categoriesPayload);
+
+        const { enabled, dayHours: loadedDayHours } =
+          openingHoursFromApi(openingHoursPayload);
+        setHoursEnabled(enabled);
+        setDayHours(loadedDayHours);
+      } catch (error) {
+        if (!cancelled) {
+          setProfileStatus({
+            message: formatApiErrorMessage(error),
+            tone: "error",
+          });
+        }
+      } finally {
+        if (!cancelled) setProfileLoading(false);
+      }
+    }
+
+    loadProfile();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function loadStripeConnectStatus() {
+    setStripeLoading(true);
+    setStripeStatus(null);
+
+    try {
+      const status = await businessStripeApi.getConnectStatus();
+      setStripeConnect(status);
+    } catch (error) {
+      setStripeStatus({
+        message: formatApiErrorMessage(error),
+        tone: "error",
+      });
+    } finally {
+      setStripeLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (tab !== "pagamenti") return;
+
+    loadStripeConnectStatus();
+
+    const handleFocus = () => {
+      loadStripeConnectStatus();
+    };
+
+    window.addEventListener("focus", handleFocus);
+    return () => window.removeEventListener("focus", handleFocus);
+  }, [tab]);
+
+  async function handleStripeOnboard() {
+    setStripeOnboarding(true);
+    setStripeStatus(null);
+
+    try {
+      const payload = await businessStripeApi.startConnectOnboard();
+      if (!payload.url) {
+        throw new Error("Link di configurazione Stripe non disponibile.");
+      }
+      window.location.href = payload.url;
+    } catch (error) {
+      setStripeStatus({
+        message: formatApiErrorMessage(error),
+        tone: "error",
+      });
+      setStripeOnboarding(false);
+    }
+  }
+
+  function updateProfileField<K extends keyof ReturnType<typeof defaultProfileForm>>(
+    key: K,
+    value: ReturnType<typeof defaultProfileForm>[K]
+  ) {
+    setProfileForm((prev) => ({ ...prev, [key]: value }));
+  }
+
+  function updateProfileRegion(region: string) {
+    setProfileForm((prev) => {
+      const provinces = getProvinceOptionsForRegion(region);
+      const provinceStillValid = provinces.some((option) => option.value === prev.province);
+      return {
+        ...prev,
+        region,
+        province: provinceStillValid ? prev.province : "",
+      };
+    });
+  }
+
+  const provinceOptions = useMemo(() => {
+    const options = getProvinceOptionsForRegion(profileForm.region);
+    if (
+      profileForm.province &&
+      !options.some((option) => option.value === profileForm.province)
+    ) {
+      return [
+        { value: profileForm.province, label: profileForm.province },
+        ...options,
+      ];
+    }
+    return options;
+  }, [profileForm.province, profileForm.region]);
+
+  async function handleSaveProfile() {
+    setProfileStatus(null);
+
+    if (hasPartialAddress(profileForm)) {
+      setProfileStatus({
+        message: "Compila tutti i campi dell'indirizzo oppure lasciali tutti vuoti.",
+        tone: "error",
+      });
+      return;
+    }
+
+    if (!hasCompleteBusinessProfile(profileForm)) {
+      setProfileStatus({
+        message:
+          "Compila tutti i campi obbligatori, incluso l'indirizzo completo.",
+        tone: "error",
+      });
+      return;
+    }
+
+    setProfileSaving(true);
+
+    try {
+      const { info: updatedInfo, address: updatedAddress } = await saveBusinessProfile({
+        business: {
+          ragioneSociale: profileForm.ragioneSociale,
+          partitaIVA: profileForm.partitaIVA,
+          codiceFiscale: profileForm.codiceFiscale,
+          codiceSDI: profileForm.codiceSDI,
+          email: profileForm.email,
+          phoneNumber: profileForm.phoneNumber,
+        },
+        contacts: {
+          pec: profileForm.pec,
+          whatsappNumber: profileForm.whatsappNumber,
+        },
+        address: {
+          fullAddress: profileForm.fullAddress,
+          cap: profileForm.cap,
+          city: profileForm.city,
+          province: profileForm.province,
+          region: profileForm.region,
+        },
+      });
+
+      const [updatedStore, updatedHours] = await Promise.all([
+        businessInfoApi.updateStoreDescription({
+          storeDescription: storeDescription.trim(),
+          productCategoryIds: selectedCategoryIds,
+        }),
+        businessInfoApi.updateOpeningHours(
+          openingHoursToApi(hoursEnabled, dayHours)
+        ),
+      ]);
+
+      const labels: Record<string, string> = { ...categoryLabels };
+      updatedStore.productCategories?.forEach((category) => {
+        if (category._id && category.name) labels[category._id] = category.name;
+      });
+      setCategoryLabels(labels);
+      setStoreDescription(updatedStore.storeDescription ?? "");
+      setSelectedCategoryIds(updatedStore.productCategoryIds ?? []);
+
+      const { enabled, dayHours: savedDayHours } = openingHoursFromApi(updatedHours);
+      setHoursEnabled(enabled);
+      setDayHours(savedDayHours);
+
+      setProfileForm((prev) => ({
+        ...prev,
+        ragioneSociale: normalizeLoadedField(updatedInfo.ragioneSociale) || prev.ragioneSociale,
+        partitaIVA: normalizeLoadedField(updatedInfo.partitaIVA) || prev.partitaIVA,
+        codiceFiscale: normalizeLoadedField(updatedInfo.codiceFiscale) || prev.codiceFiscale,
+        codiceSDI: normalizeLoadedField(updatedInfo.codiceSDI) || prev.codiceSDI,
+        email: normalizeLoadedField(updatedInfo.email) || prev.email,
+        pec: normalizeLoadedField(updatedInfo.pec),
+        phoneNumber: normalizeLoadedField(updatedInfo.phoneNumber) || prev.phoneNumber,
+        whatsappNumber: normalizeLoadedField(updatedInfo.whatsappNumber),
+        fullAddress: normalizeLoadedField(updatedAddress.fullAddress) || prev.fullAddress,
+        cap: normalizeLoadedField(updatedAddress.cap) || prev.cap,
+        city: normalizeLoadedField(updatedAddress.city) || prev.city,
+        province: normalizeLoadedField(updatedAddress.province) || prev.province,
+        region: normalizeLoadedField(updatedAddress.region) || prev.region,
+      }));
+      setHasBusinessInfo(true);
+      setProfileStatus({
+        message: "Profilo negozio aggiornato.",
+        tone: "success",
+      });
+    } catch (error) {
+      setProfileStatus({
+        message: formatApiErrorMessage(error),
+        tone: "error",
+      });
+    } finally {
+      setProfileSaving(false);
+    }
+  }
+
+  async function handleAvatarSelected(file: File | undefined) {
+    if (!file) return;
+
+    setProfileStatus(null);
+    setAvatarUploading(true);
+
+    try {
+      const imageUrl = await uploadBusinessImage(file);
+      const updated = await businessInfoApi.updateAvatar(imageUrl);
+      setProfilePictureUrl(updated.profilePictureUrl ?? imageUrl);
+      setProfileStatus({
+        message: "Foto profilo aggiornata.",
+        tone: "success",
+      });
+    } catch (error) {
+      setProfileStatus({
+        message: formatApiErrorMessage(error),
+        tone: "error",
+      });
+    } finally {
+      setAvatarUploading(false);
+      if (avatarInputRef.current) avatarInputRef.current.value = "";
+    }
+  }
+
+  function setDay<K extends DayKey>(key: K, patch: Partial<UiDayHours>) {
     setDayHours((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }));
   }
 
-  function commitCategoryInput() {
-    const t = categoryDraft.trim();
-    if (t && !categories.includes(t)) setCategories((c) => [...c, t]);
-    setCategoryDraft("");
-    setAddingCategory(false);
+  function getCategoryName(categoryId: string) {
+    return categoryLabels[categoryId] || "Categoria";
   }
 
-  function removeCategory(c: string) {
-    setCategories((prev) => prev.filter((x) => x !== c));
+  function addCategory(categoryId: string) {
+    if (!categoryId || selectedCategoryIds.includes(categoryId)) return;
+    setSelectedCategoryIds((prev) => [...prev, categoryId]);
+    setShowCategoryPicker(false);
+  }
+
+  function removeCategory(categoryId: string) {
+    setSelectedCategoryIds((prev) => prev.filter((id) => id !== categoryId));
+  }
+
+  const unselectedCategories = availableCategories.filter(
+    (category) => category._id && !selectedCategoryIds.includes(category._id)
+  );
+
+  const passwordChecks = getPasswordChecks(newPassword);
+
+  async function handleChangePassword() {
+    setPasswordStatus(null);
+
+    if (newPassword !== confirmPassword) {
+      setPasswordStatus({ message: "Le password non coincidono.", tone: "error" });
+      return;
+    }
+
+    const checks = getPasswordChecks(newPassword);
+    if (!checks.minLength || !checks.specialChars || !checks.numbers || !checks.mixedCase) {
+      setPasswordStatus({
+        message: "La nuova password non soddisfa tutti i requisiti di sicurezza.",
+        tone: "error",
+      });
+      return;
+    }
+
+    const token = getBusinessAuthToken();
+    if (!token) {
+      setPasswordStatus({ message: "Sessione scaduta. Accedi di nuovo.", tone: "error" });
+      return;
+    }
+
+    setPasswordSaving(true);
+
+    try {
+      await businessAuthApi.changePassword(oldPassword, newPassword, token);
+      setOldPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setShowPasswordForm(false);
+      setPasswordStatus({
+        message: "Password aggiornata con successo.",
+        tone: "success",
+      });
+    } catch (error) {
+      setPasswordStatus({
+        message: formatApiErrorMessage(error),
+        tone: "error",
+      });
+    } finally {
+      setPasswordSaving(false);
+    }
   }
 
   return (
@@ -172,9 +655,13 @@ export default function ImpostazioniPage() {
             rightExtra={
               <button
                 type="button"
-                className="inline-flex h-10 items-center justify-center rounded-full bg-[#214e3a] px-5 text-[12px] font-semibold text-white hover:cursor-pointer hover:bg-[#1a3f2e]"
+                onClick={() => {
+                  if (tab === "profilo") void handleSaveProfile();
+                }}
+                disabled={tab !== "profilo" || profileLoading || profileSaving}
+                className="inline-flex h-10 items-center justify-center rounded-full bg-[#214e3a] px-5 text-[12px] font-semibold text-white hover:cursor-pointer hover:bg-[#1a3f2e] disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Salva modifiche
+                {profileSaving ? "Salvataggio..." : "Salva modifiche"}
               </button>
             }
           />
@@ -183,19 +670,47 @@ export default function ImpostazioniPage() {
           <div className="w-full bg-[#1e4d36] text-white">
             <div className="mx-auto flex w-full max-w-6xl flex-col items-start gap-5 px-4 py-6 sm:flex-row sm:items-center sm:justify-between sm:px-6 sm:py-7 lg:px-8">
               <div className="flex items-center gap-4">
-                <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-full bg-white/15 text-lg font-bold text-white ring-2 ring-white/25">
-                  TS
+                <div className="relative flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-full bg-white/15 text-lg font-bold text-white ring-2 ring-white/25">
+                  {profilePictureUrl ? (
+                    <Image
+                      src={profilePictureUrl}
+                      alt={profileForm.ragioneSociale || "Avatar negozio"}
+                      fill
+                      className="object-cover"
+                      unoptimized
+                    />
+                  ) : (
+                    getBusinessInitials(profileForm.ragioneSociale)
+                  )}
                 </div>
                 <div>
-                  <div className="text-lg font-bold tracking-tight sm:text-xl">Tech Store Milano</div>
-                  <div className="mt-0.5 text-[12px] text-white/75">Negozio verificato</div>
+                  <div className="text-lg font-bold tracking-tight sm:text-xl">
+                    {profileLoading
+                      ? "Caricamento..."
+                      : profileForm.ragioneSociale || "Il tuo negozio"}
+                  </div>
+                  <div className="mt-0.5 text-[12px] text-white/75">
+                    {isValidated ? "Negozio verificato" : "In attesa di verifica"}
+                  </div>
                 </div>
               </div>
+              <input
+                ref={avatarInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  void handleAvatarSelected(file);
+                }}
+              />
               <button
                 type="button"
-                className="inline-flex items-center justify-center rounded-full border border-white/40 bg-white/10 px-5 py-2.5 text-[12px] font-semibold text-white backdrop-blur-sm hover:cursor-pointer hover:bg-white/15"
+                onClick={() => avatarInputRef.current?.click()}
+                disabled={avatarUploading || profileLoading}
+                className="inline-flex items-center justify-center rounded-full border border-white/40 bg-white/10 px-5 py-2.5 text-[12px] font-semibold text-white backdrop-blur-sm hover:cursor-pointer hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Cambia foto
+                {avatarUploading ? "Caricamento..." : "Cambia foto"}
               </button>
             </div>
           </div>
@@ -228,103 +743,252 @@ export default function ImpostazioniPage() {
             </div>
 
             <div className="mt-8">
+              {profileStatus && tab === "profilo" ? (
+                <p
+                  className={clsx(
+                    "mb-4 text-xs font-semibold",
+                    profileStatus.tone === "success" ? "text-[#2f6b3c]" : "text-red-600"
+                  )}
+                >
+                  {profileStatus.message}
+                </p>
+              ) : null}
+
               {tab === "profilo" ? (
                 <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 lg:items-start">
                   {/* Informazioni */}
                   <section className="min-w-0 rounded-2xl border border-black/[0.06] bg-white p-6 shadow-[0_1px_3px_rgba(0,0,0,0.06)] sm:p-7">
                     <h2 className="text-[15px] font-bold tracking-tight text-[#111827]">Informazioni</h2>
+                    <p className="mt-1 text-[11px] text-[#6b7280]">
+                      I campi contrassegnati con <span className="text-red-600">*</span> sono obbligatori.
+                    </p>
                     <div className="mt-6 space-y-4">
                       <div>
-                        <FieldLabel>Nome negozio</FieldLabel>
-                        <input className={inputClass} defaultValue="Tech Store Milano" />
+                        <FieldLabel required>Nome negozio</FieldLabel>
+                        <input
+                          className={inputClass}
+                          value={profileForm.ragioneSociale}
+                          onChange={(event) =>
+                            updateProfileField("ragioneSociale", event.target.value)
+                          }
+                          disabled={profileLoading}
+                        />
                       </div>
                       <div>
-                        <FieldLabel>Partita IVA</FieldLabel>
-                        <input className={inputClass} defaultValue="IT12345678901" />
+                        <FieldLabel required>Partita IVA</FieldLabel>
+                        <input
+                          className={inputClass}
+                          value={profileForm.partitaIVA}
+                          onChange={(event) =>
+                            updateProfileField("partitaIVA", event.target.value)
+                          }
+                          disabled={profileLoading}
+                        />
                       </div>
                       <div>
-                        <FieldLabel>Codice SDI</FieldLabel>
-                        <input className={inputClass} defaultValue="ABCDEFG" />
+                        <FieldLabel required>Codice fiscale</FieldLabel>
+                        <input
+                          className={inputClass}
+                          value={profileForm.codiceFiscale}
+                          onChange={(event) =>
+                            updateProfileField("codiceFiscale", event.target.value)
+                          }
+                          disabled={profileLoading}
+                          placeholder="RSSMRA80A01H501U"
+                        />
                       </div>
                       <div>
-                        <FieldLabel>Email principale</FieldLabel>
+                        <FieldLabel required>Codice SDI</FieldLabel>
+                        <input
+                          className={inputClass}
+                          value={profileForm.codiceSDI}
+                          onChange={(event) =>
+                            updateProfileField("codiceSDI", event.target.value)
+                          }
+                          disabled={profileLoading}
+                        />
+                      </div>
+                      <div>
+                        <FieldLabel required>Email principale</FieldLabel>
                         <input
                           type="email"
                           className={inputClass}
-                          defaultValue="info@techstoremilano.it"
+                          value={profileForm.email}
+                          onChange={(event) =>
+                            updateProfileField("email", event.target.value)
+                          }
+                          disabled={profileLoading}
                         />
                       </div>
                       <div>
                         <FieldLabel>PEC</FieldLabel>
-                        <input className={inputClass} defaultValue="techstoremilano@pec.it" />
+                        <input
+                          className={inputClass}
+                          value={profileForm.pec}
+                          onChange={(event) =>
+                            updateProfileField("pec", event.target.value)
+                          }
+                          disabled={profileLoading}
+                        />
                       </div>
                       <div>
-                        <FieldLabel>Telefono</FieldLabel>
-                        <input className={inputClass} defaultValue="+39 02 1234 5678" />
+                        <FieldLabel required>Telefono</FieldLabel>
+                        <input
+                          className={inputClass}
+                          value={profileForm.phoneNumber}
+                          onChange={(event) =>
+                            updateProfileField("phoneNumber", event.target.value)
+                          }
+                          disabled={profileLoading}
+                        />
                       </div>
                       <div>
                         <FieldLabel>WhatsApp Business</FieldLabel>
-                        <input className={inputClass} defaultValue="+39 345 678 9012" />
+                        <input
+                          className={inputClass}
+                          value={profileForm.whatsappNumber}
+                          onChange={(event) =>
+                            updateProfileField("whatsappNumber", event.target.value)
+                          }
+                          disabled={profileLoading}
+                        />
                       </div>
                       <div>
-                        <FieldLabel>Indirizzo completo</FieldLabel>
-                        <input className={inputClass} defaultValue="Via Roma 123, 20121 Milano (MI)" />
+                        <FieldLabel required>Indirizzo</FieldLabel>
+                        <input
+                          className={inputClass}
+                          value={profileForm.fullAddress}
+                          onChange={(event) =>
+                            updateProfileField("fullAddress", event.target.value)
+                          }
+                          disabled={profileLoading}
+                          placeholder="Via Roma 123"
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <FieldLabel required>CAP</FieldLabel>
+                          <input
+                            className={inputClass}
+                            value={profileForm.cap}
+                            onChange={(event) =>
+                              updateProfileField("cap", event.target.value)
+                            }
+                            disabled={profileLoading}
+                            placeholder="20121"
+                          />
+                        </div>
+                        <div>
+                          <FieldLabel required>Città</FieldLabel>
+                          <input
+                            className={inputClass}
+                            value={profileForm.city}
+                            onChange={(event) =>
+                              updateProfileField("city", event.target.value)
+                            }
+                            disabled={profileLoading}
+                            placeholder="Milano"
+                          />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <FieldLabel required>Regione</FieldLabel>
+                          <FormDropdown
+                            options={ITALIAN_REGION_OPTIONS}
+                            value={profileForm.region}
+                            onChange={updateProfileRegion}
+                            placeholder="Seleziona regione"
+                            aria-label="Regione"
+                            disabled={profileLoading || profileSaving}
+                          />
+                        </div>
+                        <div>
+                          <FieldLabel required>Provincia</FieldLabel>
+                          <FormDropdown
+                            options={
+                              profileForm.region
+                                ? provinceOptions
+                                : [{ value: "", label: "Seleziona prima la regione" }]
+                            }
+                            value={profileForm.province}
+                            onChange={(value) => updateProfileField("province", value)}
+                            placeholder={
+                              profileForm.region
+                                ? "Seleziona provincia"
+                                : "Seleziona prima la regione"
+                            }
+                            aria-label="Provincia"
+                            disabled={profileLoading || profileSaving || !profileForm.region}
+                          />
+                        </div>
                       </div>
                       <div>
                         <FieldLabel>Descrizione negozio</FieldLabel>
                         <textarea
                           className={textareaClass}
                           rows={5}
-                          defaultValue="Negozio specializzato in elettronica di consumo, smartphone e accessori. Offriamo assistenza in negozio e spedizioni rapide su tutto il territorio."
+                          value={storeDescription}
+                          onChange={(event) => setStoreDescription(event.target.value)}
+                          disabled={profileLoading || profileSaving}
+                          placeholder="Descrivi il tuo negozio, i prodotti e i servizi offerti."
                         />
                       </div>
                       <div>
                         <FieldLabel>Categorie prodotti</FieldLabel>
                         <div className="flex flex-wrap items-center gap-2">
-                          {categories.map((c) => (
+                          {selectedCategoryIds.map((categoryId) => (
                             <span
-                              key={c}
+                              key={categoryId}
                               className="inline-flex h-5 max-w-full items-center gap-1 rounded-full bg-[#E3EFD9] px-3 py-0 text-[12px] font-semibold text-[#214e3a] ring-1 ring-[#c5e0b8]"
                             >
-                              <span className="truncate">{c}</span>
+                              <span className="truncate">{getCategoryName(categoryId)}</span>
                               <button
                                 type="button"
-                                onClick={() => removeCategory(c)}
-                                className="inline-flex shrink-0 rounded-full  text-[#214e3a]/70 hover:cursor-pointer hover:bg-[#214e3a]/10 hover:text-[#214e3a]"
-                                aria-label={`Rimuovi ${c}`}
+                                onClick={() => removeCategory(categoryId)}
+                                disabled={profileLoading || profileSaving}
+                                className="inline-flex shrink-0 rounded-full text-[#214e3a]/70 hover:cursor-pointer hover:bg-[#214e3a]/10 hover:text-[#214e3a] disabled:cursor-not-allowed disabled:opacity-50"
+                                aria-label={`Rimuovi ${getCategoryName(categoryId)}`}
                               >
                                 <X className="h-3.5 w-3.5" strokeWidth={2.5} />
                               </button>
                             </span>
                           ))}
-                          {addingCategory ? (
-                            <input
+                          {showCategoryPicker ? (
+                            <select
                               autoFocus
-                              value={categoryDraft}
-                              onChange={(e) => setCategoryDraft(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") {
-                                  e.preventDefault();
-                                  commitCategoryInput();
-                                }
-                                if (e.key === "Escape") {
-                                  setCategoryDraft("");
-                                  setAddingCategory(false);
-                                }
+                              defaultValue=""
+                              disabled={profileLoading || profileSaving}
+                              onChange={(event) => {
+                                addCategory(event.target.value);
+                                event.target.value = "";
                               }}
-                              onBlur={() => commitCategoryInput()}
-                              placeholder="Nome categoria"
-                              className={clsx(inputClass, "h-5 w-[10rem] sm:w-44")}
-                            />
-                          ) : (
+                              onBlur={() => setShowCategoryPicker(false)}
+                              className={clsx(inputClass, "h-8 w-[12rem] sm:w-52")}
+                            >
+                              <option value="" disabled>
+                                Seleziona categoria
+                              </option>
+                              {unselectedCategories.map((category) => (
+                                <option key={category._id} value={category._id}>
+                                  {category.name}
+                                </option>
+                              ))}
+                            </select>
+                          ) : unselectedCategories.length > 0 ? (
                             <button
                               type="button"
-                              onClick={() => setAddingCategory(true)}
-                              className="inline-flex h-5 items-center justify-center rounded-lg border-2 border-dashed border-[#214e3a]/25 bg-[#fafdfb] px-4 text-[12px] font-semibold text-[#214e3a] hover:cursor-pointer hover:border-[#214e3a]/40 hover:bg-[#f3f7f0]"
+                              onClick={() => setShowCategoryPicker(true)}
+                              disabled={profileLoading || profileSaving}
+                              className="inline-flex h-5 items-center justify-center rounded-lg border-2 border-dashed border-[#214e3a]/25 bg-[#fafdfb] px-4 text-[12px] font-semibold text-[#214e3a] hover:cursor-pointer hover:border-[#214e3a]/40 hover:bg-[#f3f7f0] disabled:cursor-not-allowed disabled:opacity-50"
                             >
                               + Aggiungi
                             </button>
-                          )}
+                          ) : selectedCategoryIds.length === 0 ? (
+                            <span className="text-[12px] text-[#6b7280]">
+                              Nessuna categoria disponibile al momento.
+                            </span>
+                          ) : null}
                         </div>
                       </div>
                     </div>
@@ -341,12 +1005,13 @@ export default function ImpostazioniPage() {
                           id="hours-master"
                           checked={hoursEnabled}
                           onChange={setHoursEnabled}
+                          disabled={profileLoading || profileSaving}
                         />
                       </div>
                       <ul className="mt-5 space-y-3">
                         {DAYS_IT.map(({ key, label }) => {
                           const row = dayHours[key];
-                          const rowDisabled = !hoursEnabled;
+                          const rowDisabled = !hoursEnabled || profileLoading || profileSaving;
                           const closedRow = !row.open || rowDisabled;
                           return (
                             <li
@@ -443,42 +1108,137 @@ export default function ImpostazioniPage() {
                 </div>
               ) : tab === "pagamenti" ? (
                 <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 lg:gap-5 lg:items-stretch">
-                  {/* Conti bancari */}
+                  {/* Conti bancari — Stripe Connect */}
                   <section className="flex min-w-0 flex-col rounded-2xl border border-black/[0.06] bg-white p-5 shadow-sm sm:p-6">
                     <h2 className="text-[15px] font-bold tracking-tight text-[#111827]">Conti bancari</h2>
                     <p className="mt-1 text-[12px] text-[#6b7280]">
-                      Gestisci i tuoi conti per ricevere pagamenti
+                      Collega il tuo conto tramite Stripe Connect per ricevere gli accrediti
                     </p>
-                    <div className="mt-4 rounded-xl bg-[#2D4F36] p-4 text-white sm:p-5">
-                      <div className="text-[10px] font-semibold uppercase tracking-wide text-white/70">IBAN</div>
-                      <div className="mt-1 break-all font-mono text-[14px] font-bold leading-snug sm:text-[15px]">
-                        IT60 X054 2811 1010 0000 0123 456
+
+                    {stripeStatus ? (
+                      <p
+                        className={clsx(
+                          "mt-4 text-xs font-semibold",
+                          stripeStatus.tone === "success" ? "text-[#2f6b3c]" : "text-red-600"
+                        )}
+                      >
+                        {stripeStatus.message}
+                      </p>
+                    ) : null}
+
+                    {stripeLoading ? (
+                      <div className="mt-6 flex flex-1 items-center justify-center rounded-xl bg-[#F8F9FA] px-4 py-12">
+                        <Loader2 className="h-6 w-6 animate-spin text-[#2D4F36]" />
                       </div>
-                      <div className="mt-4 grid grid-cols-1 gap-3 my-8 sm:grid-cols-2">
-                        <div>
-                          <div className="text-[10px] font-medium text-white/65">Intestatario</div>
-                          <div className="mt-0.5 text-[12px] font-semibold">Tech Store Milano SRL</div>
+                    ) : stripeConnect?.onboardingComplete ? (
+                      <div className="mt-4 rounded-xl bg-[#2D4F36] p-4 text-white sm:p-5">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="text-[10px] font-semibold uppercase tracking-wide text-white/70">
+                              Stripe Connect
+                            </div>
+                            <div className="mt-1 text-[14px] font-bold sm:text-[15px]">
+                              Conto collegato
+                            </div>
+                          </div>
+                          <span className="inline-flex items-center gap-1 rounded-full bg-[#7ED321]/25 px-2.5 py-1 text-[10px] font-bold text-white">
+                            <CheckCircle2 className="h-3.5 w-3.5" />
+                            Attivo
+                          </span>
                         </div>
-                        <div>
-                          <div className="text-[10px] font-medium text-white/65">Banca</div>
-                          <div className="mt-0.5 text-[12px] font-semibold">Intesa Sanpaolo</div>
+
+                        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                          <div>
+                            <div className="text-[10px] font-medium text-white/65">Account ID</div>
+                            <div className="mt-0.5 font-mono text-[12px] font-semibold">
+                              {maskStripeAccountId(stripeConnect.accountId)}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-[10px] font-medium text-white/65">Accrediti</div>
+                            <div className="mt-0.5 text-[12px] font-semibold">
+                              {stripeConnect.payoutsEnabled ? "Abilitati" : "In verifica"}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-[10px] font-medium text-white/65">Pagamenti</div>
+                            <div className="mt-0.5 text-[12px] font-semibold">
+                              {stripeConnect.chargesEnabled ? "Abilitati" : "In verifica"}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-[10px] font-medium text-white/65">Provider</div>
+                            <div className="mt-0.5 text-[12px] font-semibold">Stripe Express</div>
+                          </div>
+                        </div>
+
+                        <div className="mt-4 border-t border-white/15 pt-4">
+                          <button
+                            type="button"
+                            onClick={handleStripeOnboard}
+                            disabled={stripeOnboarding}
+                            className="w-full rounded-lg bg-[#FFFFFF33] py-2.5 text-[12px] font-semibold text-white hover:cursor-pointer hover:bg-[#7ED321]/35 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {stripeOnboarding ? "Apertura Stripe..." : "Aggiorna dati bancari"}
+                          </button>
                         </div>
                       </div>
-                      <div className="mt-4 border-t border-white/15 pt-4">
+                    ) : stripeConnect?.connected ? (
+                      <div className="mt-4 flex flex-1 flex-col rounded-xl border border-amber-200 bg-amber-50 p-4 sm:p-5">
+                        <div className="flex items-start gap-3">
+                          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-amber-100 text-amber-700">
+                            <AlertCircle className="h-5 w-5" />
+                          </span>
+                          <div className="min-w-0">
+                            <div className="text-[13px] font-bold text-[#111827]">
+                              Configurazione incompleta
+                            </div>
+                            <p className="mt-1 text-[12px] text-[#6b7280]">
+                              Hai iniziato la configurazione Stripe ma non l&apos;hai ancora completata.
+                              Termina l&apos;onboarding per ricevere pagamenti e accrediti.
+                            </p>
+                            {stripeConnect.accountId ? (
+                              <p className="mt-2 font-mono text-[11px] text-[#6b7280]">
+                                {maskStripeAccountId(stripeConnect.accountId)}
+                              </p>
+                            ) : null}
+                          </div>
+                        </div>
                         <button
                           type="button"
-                          className="w-full rounded-lg bg-[#FFFFFF33] py-2.5 text-[12px] font-semibold text-white hover:cursor-pointer hover:bg-[#7ED321]/35"
+                          onClick={handleStripeOnboard}
+                          disabled={stripeOnboarding}
+                          className="mt-4 w-full rounded-lg bg-[#2D4F36] py-3 text-[12px] font-semibold text-white hover:cursor-pointer hover:bg-[#244530] disabled:cursor-not-allowed disabled:opacity-60"
                         >
-                          Modifica
+                          {stripeOnboarding ? "Apertura Stripe..." : "Completa configurazione"}
                         </button>
                       </div>
-                    </div>
-                    <button
-                      type="button"
-                      className="mt-4 w-full rounded-lg bg-[#2D4F36] py-3 text-[12px] font-semibold text-white hover:cursor-pointer hover:bg-[#244530]"
-                    >
-                      Aggiungi conto
-                    </button>
+                    ) : (
+                      <div className="mt-4 flex flex-1 flex-col rounded-xl border border-dashed border-black/10 bg-[#F8F9FA] p-4 sm:p-5">
+                        <div className="flex items-start gap-3">
+                          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#DFEED6] text-[#2D4F36]">
+                            <Wallet className="h-5 w-5" />
+                          </span>
+                          <div className="min-w-0">
+                            <div className="text-[13px] font-bold text-[#111827]">
+                              Nessun conto collegato
+                            </div>
+                            <p className="mt-1 text-[12px] text-[#6b7280]">
+                              Collega il conto bancario del negozio con Stripe Connect Express.
+                              I dati bancari vengono gestiti in modo sicuro da Stripe.
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleStripeOnboard}
+                          disabled={stripeOnboarding}
+                          className="mt-4 w-full rounded-lg bg-[#2D4F36] py-3 text-[12px] font-semibold text-white hover:cursor-pointer hover:bg-[#244530] disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {stripeOnboarding ? "Apertura Stripe..." : "Collega conto bancario"}
+                        </button>
+                      </div>
+                    )}
                   </section>
 
                   {/* Metodi di pagamento accettati */}
@@ -787,41 +1547,147 @@ export default function ImpostazioniPage() {
                     <h2 className="text-[15px] font-bold tracking-tight text-[#111827]">
                       Password e autenticazione
                     </h2>
-                    <div className="mt-5 bg-[#F9FAFB] rounded-xl p-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                      <div className="min-w-0">
-                        <div className="text-[13px] font-semibold text-[#111827]">Password Corrente</div>
-                        <div className="mt-0.5 text-[11px] text-[#6b7280]">Ultima modifica: 23 Marzo 2024</div>
-                      </div>
-                      <Link
-                        href="/dashboard/impostazioni/cambia-password"
-                        className="inline-flex h-10 shrink-0 items-center justify-center rounded-lg bg-[#214e3a] px-4 text-[12px] font-semibold text-white hover:cursor-pointer hover:bg-[#1a3f2e] sm:px-5"
+
+                    {passwordStatus ? (
+                      <p
+                        className={clsx(
+                          "mt-4 text-xs font-semibold",
+                          passwordStatus.tone === "success" ? "text-[#2f6b3c]" : "text-red-600"
+                        )}
                       >
-                        Cambia password
-                      </Link>
-                    </div>
+                        {passwordStatus.message}
+                      </p>
+                    ) : null}
+
+                    {!showPasswordForm ? (
+                      <div className="mt-5 flex flex-col gap-4 rounded-xl bg-[#F9FAFB] p-4 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="min-w-0">
+                          <div className="text-[13px] font-semibold text-[#111827]">
+                            Password corrente
+                          </div>
+                          <div className="mt-0.5 text-[11px] text-[#6b7280]">
+                            Aggiorna la password del tuo account venditore
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPasswordStatus(null);
+                            setShowPasswordForm(true);
+                          }}
+                          className="inline-flex h-10 shrink-0 items-center justify-center rounded-lg bg-[#214e3a] px-4 text-[12px] font-semibold text-white hover:cursor-pointer hover:bg-[#1a3f2e] sm:px-5"
+                        >
+                          Cambia password
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="mt-5 space-y-4 rounded-xl bg-[#F9FAFB] p-4">
+                        <div>
+                          <FieldLabel>Password attuale</FieldLabel>
+                          <input
+                            type="password"
+                            value={oldPassword}
+                            onChange={(event) => setOldPassword(event.target.value)}
+                            disabled={passwordSaving}
+                            className={inputClass}
+                            placeholder="Inserisci password attuale"
+                            autoComplete="current-password"
+                          />
+                        </div>
+                        <div>
+                          <FieldLabel>Nuova password</FieldLabel>
+                          <input
+                            type="password"
+                            value={newPassword}
+                            onChange={(event) => setNewPassword(event.target.value)}
+                            disabled={passwordSaving}
+                            className={inputClass}
+                            placeholder="Minimo 8 caratteri"
+                            autoComplete="new-password"
+                          />
+                        </div>
+                        <div>
+                          <FieldLabel>Conferma nuova password</FieldLabel>
+                          <input
+                            type="password"
+                            value={confirmPassword}
+                            onChange={(event) => setConfirmPassword(event.target.value)}
+                            disabled={passwordSaving}
+                            className={inputClass}
+                            placeholder="Ripeti nuova password"
+                            autoComplete="new-password"
+                          />
+                        </div>
+                        <div className="flex flex-wrap justify-end gap-2 pt-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowPasswordForm(false);
+                              setOldPassword("");
+                              setNewPassword("");
+                              setConfirmPassword("");
+                              setPasswordStatus(null);
+                            }}
+                            disabled={passwordSaving}
+                            className="inline-flex h-10 items-center rounded-xl border border-black/10 bg-white px-4 text-[12px] font-semibold text-[#1f2b20] hover:cursor-pointer hover:bg-black/5 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            Annulla
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleChangePassword()}
+                            disabled={passwordSaving || !oldPassword || !newPassword || !confirmPassword}
+                            className="inline-flex h-10 items-center rounded-xl bg-[#214e3a] px-4 text-[12px] font-semibold text-white hover:cursor-pointer hover:bg-[#1a3f2e] disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {passwordSaving ? "Salvataggio..." : "Salva nuova password"}
+                          </button>
+                        </div>
+                      </div>
+                    )}
 
                     <div className="mt-6 grid grid-cols-2 gap-3">
                       {(
                         [
-                          { title: "Lunghezza minima", sub: "Almeno 8 caratteri" },
-                          { title: "Caratteri speciali", sub: "Simboli inclusi" },
-                          { title: "Numeri", sub: "Presenti" },
-                          { title: "Maiuscole/Minuscole", sub: "Combinazione corretta" },
+                          { key: "minLength" as const, title: "Lunghezza minima", sub: "Almeno 8 caratteri" },
+                          { key: "specialChars" as const, title: "Caratteri speciali", sub: "Simboli inclusi" },
+                          { key: "numbers" as const, title: "Numeri", sub: "Presenti" },
+                          { key: "mixedCase" as const, title: "Maiuscole/Minuscole", sub: "Combinazione corretta" },
                         ] as const
-                      ).map((cell) => (
-                        <div
-                          key={cell.title}
-                          className="flex gap-3 rounded-xl border border-[#e5e7eb] bg-white p-3 sm:p-3.5"
-                        >
-                          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#ecf8eb]">
-                            <CheckCircle2 className="h-4 w-4 text-[#76C043]" strokeWidth={2.25} />
-                          </span>
-                          <div className="min-w-0">
-                            <div className="text-[12px] font-semibold text-[#111827]">{cell.title}</div>
-                            <div className="text-[10px] leading-snug text-[#6b7280] sm:text-[11px]">{cell.sub}</div>
+                      ).map((cell) => {
+                        const met = passwordChecks[cell.key];
+                        return (
+                          <div
+                            key={cell.title}
+                            className={clsx(
+                              "flex gap-3 rounded-xl border p-3 sm:p-3.5",
+                              met
+                                ? "border-[#c5e8c0] bg-[#f7fcf4]"
+                                : "border-[#e5e7eb] bg-white"
+                            )}
+                          >
+                            <span
+                              className={clsx(
+                                "flex h-8 w-8 shrink-0 items-center justify-center rounded-full",
+                                met ? "bg-[#ecf8eb]" : "bg-[#f3f4f6]"
+                              )}
+                            >
+                              <CheckCircle2
+                                className={clsx(
+                                  "h-4 w-4",
+                                  met ? "text-[#76C043]" : "text-[#d1d5db]"
+                                )}
+                                strokeWidth={2.25}
+                              />
+                            </span>
+                            <div className="min-w-0">
+                              <div className="text-[12px] font-semibold text-[#111827]">{cell.title}</div>
+                              <div className="text-[10px] leading-snug text-[#6b7280] sm:text-[11px]">
+                                {cell.sub}
+                              </div>
+                            </div>
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
 
                     <div className="mt-6 rounded-xl bg-[#ecf8eb] p-4 ring-1 ring-[#c5e8c0] sm:p-5">

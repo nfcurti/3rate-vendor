@@ -17,6 +17,7 @@ export function FormDropdown({
   placeholder,
   "aria-label": ariaLabel,
   className,
+  disabled = false,
 }: {
   options: FormDropdownOption[];
   value: string;
@@ -24,6 +25,7 @@ export function FormDropdown({
   placeholder: string;
   "aria-label": string;
   className?: string;
+  disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
@@ -55,8 +57,15 @@ export function FormDropdown({
         aria-expanded={open}
         aria-haspopup="listbox"
         aria-label={ariaLabel}
-        onClick={() => setOpen((v) => !v)}
-        className={triggerClass}
+        disabled={disabled}
+        onClick={() => {
+          if (disabled) return;
+          setOpen((v) => !v);
+        }}
+        className={clsx(
+          triggerClass,
+          disabled && "cursor-not-allowed opacity-60"
+        )}
       >
         <span
           className={clsx(

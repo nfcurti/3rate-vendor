@@ -1,14 +1,12 @@
-/* eslint-disable @next/next/no-img-element */
-
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
 import {
-  Bell,
   ChevronDown,
-  CircleHelp,
+  Loader2,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bar,
   BarChart,
@@ -18,10 +16,21 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { formatApiErrorMessage } from "@/lib/business-auth";
+import {
+  articleToProductRow,
+  businessArticlesApi,
+  getVariationCounts,
+} from "@/lib/business-articles";
+import {
+  businessOrdersApi,
+  computeOrderDashboardStats,
+  getShippingStatuses,
+} from "@/lib/business-orders";
 import { DashboardViewHeader } from "./_components/DashboardViewHeader";
+import { ProductsTable } from "./_components/ProductsTable";
 import { Sidebar } from "./_components/Sidebar";
 import { ViewTransition } from "./_components/ViewTransition";
-import { demoProductsRows, ProductsTable } from "./_components/ProductsTable";
 
 function SalesChart({ data }: { data: { day: string; value: number }[] }) {
   // Recharts' ResponsiveContainer can emit size warnings during static generation.
@@ -69,14 +78,18 @@ type MetricCardProps = {
   value: string;
 };
 
-function MetricCard({ label, value }: MetricCardProps) {
+function MetricCard({ label, value, loading }: MetricCardProps & { loading?: boolean }) {
   return (
     <div className="rounded-lg  bg-white px-5 py-6 shadow-[0_12px_28px_rgba(16,24,16,0.06)]">
       <div className="text-xs font-medium tracking-wide text-[#6B7280]">
         {label}
       </div>
       <div className="mt-1 text-3xl font-bold leading-tight text-[#1f2b20]">
-        {value}
+        {loading ? (
+          <Loader2 className="h-7 w-7 animate-spin text-[#214e3a]" />
+        ) : (
+          value
+        )}
       </div>
     </div>
   );
@@ -110,6 +123,68 @@ export default function DashboardPage() {
   const [rangeOpen, setRangeOpen] = useState(false);
   const rangeRef = useRef<HTMLDivElement | null>(null);
   const [salesRangeDays, setSalesRangeDays] = useState<7 | 30 | 90>(30);
+  const [dashboardLoading, setDashboardLoading] = useState(true);
+  const [orderStats, setOrderStats] = useState({
+    toShip: 0,
+    forPickup: 0,
+    inTransit: 0,
+    delivered: 0,
+    shippedLast7Days: 0,
+  });
+  const [activeListingsCount, setActiveListingsCount] = useState(0);
+  const [productRows, setProductRows] = useState<ReturnType<typeof articleToProductRow>[]>([]);
+
+  const loadDashboard = useCallback(async () => {
+    setDashboardLoading(true);
+
+    try {
+      const [orders, statuses, articles] = await Promise.all([
+        businessOrdersApi.getAll(),
+        getShippingStatuses(),
+        businessArticlesApi.getListings(),
+      ]);
+
+      setOrderStats(computeOrderDashboardStats(orders, statuses));
+
+      const activeArticles = articles.filter((article) => article.isActive);
+      setActiveListingsCount(activeArticles.length);
+
+      const variationCounts = getVariationCounts(articles);
+      setProductRows(
+        activeArticles
+          .slice(0, 4)
+          .map((article) => articleToProductRow(article, variationCounts))
+      );
+    } catch (error) {
+      console.error("[dashboard]", formatApiErrorMessage(error));
+      setOrderStats({
+        toShip: 0,
+        forPickup: 0,
+        inTransit: 0,
+        delivered: 0,
+        shippedLast7Days: 0,
+      });
+      setActiveListingsCount(0);
+      setProductRows([]);
+    } finally {
+      setDashboardLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadDashboard();
+  }, [loadDashboard]);
+
+  const orderSummaryRows = useMemo(
+    () => [
+      { label: "In attesa di spedizione", value: String(orderStats.toShip) },
+      { label: "In attesa di ritiro", value: String(orderStats.forPickup) },
+      { label: "Spediti (ultimi 7gg)", value: String(orderStats.shippedLast7Days) },
+      { label: "Richieste di reso", value: "0" },
+    ],
+    [orderStats]
+  );
+
   const salesData = useMemo(() => {
     // Placeholder data until wired to real metrics.
     const base = [
@@ -166,10 +241,22 @@ export default function DashboardPage() {
           <div className="mx-auto w-full max-w-6xl px-4 py-7 lg:px-8">
 
           <section className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <MetricCard label="Guadagno totale" value="€12.450" />
-            <MetricCard label="Ordini da spedire" value="14" />
-            <MetricCard label="Ordini per ritiro" value="40" />
-            <MetricCard label="Articoli in vendita" value="342" />
+            <MetricCard label="Guadagno totale" value="—" loading={dashboardLoading} />
+            <MetricCard
+              label="Ordini da spedire"
+              value={String(orderStats.toShip)}
+              loading={dashboardLoading}
+            />
+            <MetricCard
+              label="Ordini per ritiro"
+              value={String(orderStats.forPickup)}
+              loading={dashboardLoading}
+            />
+            <MetricCard
+              label="Articoli in vendita"
+              value={String(activeListingsCount)}
+              loading={dashboardLoading}
+            />
           </section>
 
           <section className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-[1.15fr_1fr_1fr]">
@@ -178,21 +265,21 @@ export default function DashboardPage() {
                 <div className="text-md font-semibold text-[#1f2b20]">
                   I tuoi ordini
                 </div>
-                <a
+                <Link
                   href="/dashboard/ordini"
                   className="text-xs font-semibold text-[#2f6b3c] hover:cursor-pointer hover:underline"
                 >
                   Gestisci ordini
-                </a>
+                </Link>
               </div>
               <hr className="mt-2 border-0 h-[1px] bg-[#F3F4F6]" style={{ backgroundColor: "#F3F4F6" }} />
               <div className="mt-4 space-y-3 text-sm">
-                {[
-                  { label: "In attesa di spedizione", value: "14" },
-                  { label: "In attesa di ritiro", value: "40" },
-                  { label: "Spediti (ultimi 7gg)", value: "42" },
-                  { label: "Richieste di reso", value: "2" },
-                ].map((r) => (
+                {dashboardLoading ? (
+                  <div className="flex justify-center py-6">
+                    <Loader2 className="h-5 w-5 animate-spin text-[#214e3a]" />
+                  </div>
+                ) : (
+                  orderSummaryRows.map((r) => (
                   <div
                     key={r.label}
                     className="flex items-center justify-between text-[#6b746c]"
@@ -202,7 +289,8 @@ export default function DashboardPage() {
                       {r.value}
                     </span>
                   </div>
-                ))}
+                  ))
+                )}
               </div>
             </div>
 
@@ -388,15 +476,33 @@ export default function DashboardPage() {
           </section>
 
           <div className="mt-4">
-            <ProductsTable
-              rows={demoProductsRows}
-              footerHref="/dashboard/magazzino"
-              rowActionHrefBuilder={(row) =>
-                row.action === "Rifornisci"
-                  ? `/dashboard/magazzino/gestione?mode=restock&sku=${encodeURIComponent(row.sku)}`
-                  : `/dashboard/magazzino/gestione?mode=edit&sku=${encodeURIComponent(row.sku)}`
-              }
-            />
+            {dashboardLoading ? (
+              <div className="flex items-center justify-center rounded-3xl bg-white py-16 shadow-[0_12px_28px_rgba(16,24,16,0.06)]">
+                <Loader2 className="h-6 w-6 animate-spin text-[#214e3a]" />
+              </div>
+            ) : productRows.length === 0 ? (
+              <div className="rounded-3xl bg-white px-6 py-12 text-center shadow-[0_12px_28px_rgba(16,24,16,0.06)]">
+                <p className="text-[13px] font-semibold text-[#1f2b20]">
+                  Nessun articolo in vendita
+                </p>
+                <Link
+                  href="/dashboard/magazzino/gestione?mode=create"
+                  className="mt-3 inline-flex text-[12px] font-semibold text-[#2f6b3c] hover:cursor-pointer hover:underline"
+                >
+                  Aggiungi il primo prodotto
+                </Link>
+              </div>
+            ) : (
+              <ProductsTable
+                rows={productRows}
+                footerHref="/dashboard/magazzino"
+                rowActionHrefBuilder={(row) =>
+                  row.action === "Rifornisci"
+                    ? `/dashboard/magazzino/gestione?mode=restock&id=${encodeURIComponent(row.sku)}`
+                    : `/dashboard/magazzino/gestione?mode=edit&id=${encodeURIComponent(row.sku)}`
+                }
+              />
+            )}
           </div>
 
           <section className="mt-4 rounded-2xl bg-[#214e3a] p-5 text-white shadow-[0_12px_28px_rgba(16,24,16,0.08)] sm:p-6">

@@ -5,13 +5,17 @@
 import clsx from "clsx";
 import {
   Bell,
-  CircleHelp,
   LogOut,
   Menu,
   X,
 } from "lucide-react";
-import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { useCallback, useEffect, useState } from "react";
+import {
+  getBusinessAccountId,
+  logoutBusinessSession,
+} from "@/lib/business-auth";
+import { businessInfoApi, getBusinessInitials } from "@/lib/business-info";
 
 type NavItem = {
   href: string;
@@ -85,9 +89,93 @@ function SidebarItem({ href, label }: NavItem) {
   );
 }
 
+function normalizeDisplayName(value?: string | null) {
+  const trimmed = value?.trim();
+  if (!trimmed || trimmed === "-") return "";
+  return trimmed;
+}
+
+function SidebarProfileCard({
+  storeName,
+  accountId,
+  profilePictureUrl,
+  onLogout,
+}: {
+  storeName: string;
+  accountId: string | null;
+  profilePictureUrl: string | null;
+  onLogout: () => void;
+}) {
+  const initials = getBusinessInitials(storeName);
+
+  return (
+    <div className="shrink-0 border-t border-white/10 px-4 py-4">
+      <div className="flex items-center justify-between gap-3 rounded-2xl bg-black/15 px-3 py-3 ring-1 ring-white/10">
+        <div className="flex min-w-0 items-center gap-3">
+          {profilePictureUrl ? (
+            <img
+              src={profilePictureUrl}
+              alt=""
+              className="h-9 w-9 shrink-0 rounded-full object-cover ring-1 ring-white/15"
+            />
+          ) : (
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#5DBE54]/25 text-[10px] font-bold text-white ring-1 ring-white/15">
+              {initials}
+            </div>
+          )}
+          <div className="min-w-0">
+            <div className="truncate text-[11px] font-semibold" title={storeName}>
+              {storeName}
+            </div>
+            <div
+              className="truncate text-[10px] text-white/70"
+              title={accountId ?? undefined}
+            >
+              ID: {accountId ?? "—"}
+            </div>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onClick={onLogout}
+          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/10 ring-1 ring-white/15 hover:cursor-pointer hover:bg-white/15"
+          aria-label="Esci"
+        >
+          <LogOut className="h-4 w-4 text-white/80" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [accountId, setAccountId] = useState<string | null>(null);
+  const [storeName, setStoreName] = useState("Il mio negozio");
+  const [profilePictureUrl, setProfilePictureUrl] = useState<string | null>(null);
+
+  const loadSidebarProfile = useCallback(async () => {
+    setAccountId(getBusinessAccountId());
+
+    try {
+      const payload = await businessInfoApi.getAccountInfo();
+      const businessName = normalizeDisplayName(payload.info?.ragioneSociale);
+      const email = normalizeDisplayName(payload.account?.email);
+
+      setStoreName(businessName || email || "Il mio negozio");
+      setProfilePictureUrl(payload.info?.profilePictureUrl ?? null);
+      setAccountId(payload.account?._id ?? payload.info?.businessAccountId ?? getBusinessAccountId());
+    } catch {
+      setAccountId(getBusinessAccountId());
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadSidebarProfile();
+  }, [loadSidebarProfile, pathname]);
 
   useEffect(() => {
     setMobileOpen(false);
@@ -111,9 +199,14 @@ export function Sidebar() {
     };
   }, [mobileOpen]);
 
+  function handleLogout() {
+    logoutBusinessSession();
+    router.push("/");
+  }
+
   const sidebarBody = (
-    <div className="flex h-full flex-col bg-[#214e3a] text-white">
-      <div className="px-6 py-6">
+    <div className="flex h-full min-h-0 flex-col bg-[#214e3a] text-white">
+      <div className="shrink-0 px-6 py-6">
         <div className="flex items-center gap-3">
           <img src="/brand/logo.svg" alt="3rate" className="h-9 w-auto" />
           <span className="rounded-full bg-[#5DBE54] px-2 py-1 text-[10px] font-semibold text-[#14311f]">
@@ -122,7 +215,7 @@ export function Sidebar() {
         </div>
       </div>
 
-      <nav className="px-4 pb-6">
+      <nav className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
         <SectionLabel>PRINCIPALE</SectionLabel>
         <div className="space-y-1.5">
           {primary.map((it) => (
@@ -164,27 +257,12 @@ export function Sidebar() {
         </div>
       </div>
 
-      <div className="mt-auto px-4 pb-5">
-        <div className="flex items-center justify-between gap-3 rounded-2xl bg-black/15 px-3 py-3 ring-1 ring-white/10">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="h-9 w-9 rounded-full bg-[#5DBE54]/25 ring-1 ring-white/15" />
-            <div className="min-w-0">
-              <div className="truncate text-[11px] font-semibold">
-                Tech Store Milano
-              </div>
-              <div className="text-[10px] text-white/70">ID: 8832901</div>
-            </div>
-          </div>
-
-          <a
-            href="/"
-            className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 ring-1 ring-white/15 hover:cursor-pointer hover:bg-white/15"
-            aria-label="Esci"
-          >
-            <LogOut className="h-4 w-4 text-white/80" />
-          </a>
-        </div>
-      </div>
+      <SidebarProfileCard
+        storeName={storeName}
+        accountId={accountId}
+        profilePictureUrl={profilePictureUrl}
+        onLogout={handleLogout}
+      />
     </div>
   );
 
@@ -210,7 +288,7 @@ export function Sidebar() {
             onClick={() => setMobileOpen(false)}
           />
 
-          <aside className="relative h-full w-[288px] max-w-[82vw] shadow-[0_24px_60px_rgba(16,24,16,0.28)]">
+          <aside className="relative flex h-full w-[288px] max-w-[82vw] flex-col shadow-[0_24px_60px_rgba(16,24,16,0.28)]">
             <div className="absolute right-3 top-3 z-10">
               <button
                 type="button"
@@ -226,9 +304,11 @@ export function Sidebar() {
         </div>
       ) : null}
 
-      <aside className="hidden lg:block">
-        {sidebarBody}
-      </aside>
+      <div className="relative hidden w-[260px] shrink-0 lg:block" aria-hidden>
+        <aside className="fixed inset-y-0 left-0 z-40 flex w-[260px] flex-col">
+          {sidebarBody}
+        </aside>
+      </div>
     </>
   );
 }

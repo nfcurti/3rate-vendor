@@ -7,15 +7,19 @@ import { Lock, Mail } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
-import { businessAuthApi } from "@/lib/business-auth";
+import {
+  businessAuthApi,
+  saveBusinessSession,
+} from "@/lib/business-auth";
 
-export default function PasswordDimenticataPage() {
+export default function RegistratiPage() {
   const router = useRouter();
-  const [step, setStep] = useState<"email" | "otp">("email");
+  const [step, setStep] = useState<"details" | "otp">("details");
   const [email, setEmail] = useState("");
-  const [otp, setOtp] = useState("");
-  const [newPassword, setNewPassword] = useState("");
+  const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
+  const [otp, setOtp] = useState("");
   const [status, setStatus] = useState<{
     message: string;
     tone: "error" | "success";
@@ -23,13 +27,30 @@ export default function PasswordDimenticataPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isResending, setIsResending] = useState(false);
 
-  const handleRestoreRequest = async (event: FormEvent<HTMLFormElement>) => {
+  const handleSignup = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setStatus(null);
+
+    if (password !== confirmPassword) {
+      setStatus({
+        message: "Le password non coincidono.",
+        tone: "error",
+      });
+      return;
+    }
+
+    if (!acceptedTerms) {
+      setStatus({
+        message: "Accetta condizioni d'uso e privacy policy per continuare.",
+        tone: "error",
+      });
+      return;
+    }
+
     setIsSubmitting(true);
 
     try {
-      await businessAuthApi.restorePassword(email.trim());
+      await businessAuthApi.signup(email.trim(), password);
       setStep("otp");
       setStatus({
         message: "Ti abbiamo inviato un codice OTP via email.",
@@ -40,7 +61,7 @@ export default function PasswordDimenticataPage() {
         message:
           error instanceof Error
             ? error.message
-            : "Richiesta non riuscita. Riprova.",
+            : "Registrazione non riuscita. Riprova.",
         tone: "error",
       });
     } finally {
@@ -48,34 +69,24 @@ export default function PasswordDimenticataPage() {
     }
   };
 
-  const handleRestoreValidation = async (event: FormEvent<HTMLFormElement>) => {
+  const handleValidateSignup = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setStatus(null);
-
-    if (newPassword !== confirmPassword) {
-      setStatus({ message: "Le password non coincidono.", tone: "error" });
-      return;
-    }
-
     setIsSubmitting(true);
 
     try {
-      await businessAuthApi.validateRestorePassword(
+      const session = await businessAuthApi.validateSignup(
         email.trim(),
-        otp.trim(),
-        newPassword
+        otp.trim()
       );
-      setStatus({
-        message: "Password aggiornata. Ora puoi accedere.",
-        tone: "success",
-      });
-      window.setTimeout(() => router.push("/"), 1500);
+      saveBusinessSession(session);
+      router.push("/dashboard");
     } catch (error) {
       setStatus({
         message:
           error instanceof Error
             ? error.message
-            : "Recupero password non riuscito. Riprova.",
+            : "Codice non valido. Riprova.",
         tone: "error",
       });
     } finally {
@@ -88,7 +99,7 @@ export default function PasswordDimenticataPage() {
     setIsResending(true);
 
     try {
-      await businessAuthApi.restoreResendCode(email.trim());
+      await businessAuthApi.signupResendCode(email.trim());
       setStatus({ message: "Codice inviato di nuovo.", tone: "success" });
     } catch (error) {
       setStatus({
@@ -117,30 +128,14 @@ export default function PasswordDimenticataPage() {
 
             <div className="mt-12">
               <h1 className="text-4xl font-semibold leading-tight tracking-tight lg:text-5xl">
-                Recupera il tuo
+                Inizia a vendere
                 <br />
-                accesso
+                con 3Rate
               </h1>
               <p className="mt-5 max-w-xl text-sm text-white/75">
-                Ti invieremo un codice OTP per reimpostare la password e
-                rientrare nel pannello venditore.
+                Crea il tuo account venditore e accedi al pannello per gestire
+                prodotti, ordini e pagamenti.
               </p>
-
-              <div className="mt-10 space-y-6">
-                <div>
-                  <div className="text-sm font-semibold">Sicurezza</div>
-                  <div className="mt-1 text-xs text-white/70">
-                    Se l&apos;email è registrata, riceverai istruzioni in pochi
-                    minuti.
-                  </div>
-                </div>
-                <div>
-                  <div className="text-sm font-semibold">Supporto</div>
-                  <div className="mt-1 text-xs text-white/70">
-                    Se non trovi l&apos;email, controlla anche nello spam.
-                  </div>
-                </div>
-              </div>
             </div>
           </div>
         </section>
@@ -152,15 +147,17 @@ export default function PasswordDimenticataPage() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             transition={{ duration: 0.35, ease: "easeOut" }}
           >
-            <h2 className="text-lg font-semibold">Password dimenticata</h2>
+            <h2 className="text-lg font-semibold">
+              {step === "details" ? "Crea account venditore" : "Verifica email"}
+            </h2>
             <p className="mt-1 text-xs text-[#6b746c]">
-              {step === "email"
-                ? "Inserisci la tua email per ricevere il codice di recupero"
+              {step === "details"
+                ? "Compila i dati per registrare il tuo negozio."
                 : `Inserisci il codice OTP inviato a ${email}.`}
             </p>
 
-            {step === "email" ? (
-              <form className="mt-6 space-y-4" onSubmit={handleRestoreRequest}>
+            {step === "details" ? (
+              <form className="mt-6 space-y-4" onSubmit={handleSignup}>
                 <div className="space-y-2">
                   <label className="text-[11px] font-semibold text-[#6b746c]">
                     Email
@@ -178,42 +175,16 @@ export default function PasswordDimenticataPage() {
                   </div>
                 </div>
 
-                <button
-                  type="submit"
-                  disabled={isSubmitting}
-                  className="mt-1 inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#2f5c45] text-sm font-semibold text-white shadow-sm hover:cursor-pointer hover:bg-[#284f3b] active:translate-y-px disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {isSubmitting ? "Invio in corso..." : "Invia codice"}
-                  {!isSubmitting && <span aria-hidden>→</span>}
-                </button>
-              </form>
-            ) : (
-              <form className="mt-6 space-y-4" onSubmit={handleRestoreValidation}>
                 <div className="space-y-2">
                   <label className="text-[11px] font-semibold text-[#6b746c]">
-                    Codice OTP
-                  </label>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    value={otp}
-                    onChange={(event) => setOtp(event.target.value)}
-                    placeholder="123456"
-                    required
-                    className="h-11 w-full rounded-xl border border-[#e3e8e3] bg-white px-4 text-sm outline-none focus:border-[#5DBE54] focus:ring-4 focus:ring-[#5DBE54]/15"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-[11px] font-semibold text-[#6b746c]">
-                    Nuova password
+                    Password
                   </label>
                   <div className="relative">
                     <Lock className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[#9aa39a]" />
                     <input
                       type="password"
-                      value={newPassword}
-                      onChange={(event) => setNewPassword(event.target.value)}
+                      value={password}
+                      onChange={(event) => setPassword(event.target.value)}
                       placeholder="••••••••"
                       required
                       minLength={8}
@@ -224,7 +195,7 @@ export default function PasswordDimenticataPage() {
 
                 <div className="space-y-2">
                   <label className="text-[11px] font-semibold text-[#6b746c]">
-                    Conferma nuova password
+                    Conferma password
                   </label>
                   <div className="relative">
                     <Lock className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[#9aa39a]" />
@@ -240,12 +211,47 @@ export default function PasswordDimenticataPage() {
                   </div>
                 </div>
 
+                <label className="flex items-start gap-2 text-[10px] text-[#6b746c]">
+                  <input
+                    type="checkbox"
+                    checked={acceptedTerms}
+                    onChange={(event) => setAcceptedTerms(event.target.checked)}
+                    className="mt-1 h-3.5 w-3.5 shrink-0 rounded border-[#cfd6cf]"
+                  />
+                  Accetto le condizioni d&apos;uso e la privacy policy.
+                </label>
+
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="mt-1 inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#2f5c45] text-sm font-semibold text-white shadow-sm hover:cursor-pointer hover:bg-[#284f3b] active:translate-y-px disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isSubmitting ? "Creazione account..." : "Crea account"}
+                </button>
+              </form>
+            ) : (
+              <form className="mt-6 space-y-4" onSubmit={handleValidateSignup}>
+                <div className="space-y-2">
+                  <label className="text-[11px] font-semibold text-[#6b746c]">
+                    Codice OTP
+                  </label>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={otp}
+                    onChange={(event) => setOtp(event.target.value)}
+                    placeholder="123456"
+                    required
+                    className="h-11 w-full rounded-xl border border-[#e3e8e3] bg-white px-4 text-sm outline-none focus:border-[#5DBE54] focus:ring-4 focus:ring-[#5DBE54]/15"
+                  />
+                </div>
+
                 <button
                   type="submit"
                   disabled={isSubmitting}
                   className="inline-flex h-11 w-full items-center justify-center rounded-xl bg-[#2f5c45] text-sm font-semibold text-white shadow-sm hover:cursor-pointer hover:bg-[#284f3b] disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {isSubmitting ? "Aggiornamento..." : "Aggiorna password"}
+                  {isSubmitting ? "Verifica in corso..." : "Verifica account"}
                 </button>
 
                 <button
@@ -270,12 +276,12 @@ export default function PasswordDimenticataPage() {
             )}
 
             <div className="mt-6 text-center text-[10px] text-[#6b746c]">
-              Ti sei ricordato la password?{" "}
+              Hai già un account?{" "}
               <Link
                 href="/"
                 className="font-semibold text-[#2f6b3c] hover:cursor-pointer hover:underline"
               >
-                Torna al login
+                Accedi
               </Link>
             </div>
           </motion.div>
