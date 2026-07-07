@@ -279,6 +279,7 @@ export default function ImpostazioniPage() {
   const [showDeleteFlow, setShowDeleteFlow] = useState(false);
   const [deleteOtp, setDeleteOtp] = useState("");
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const [deleteResending, setDeleteResending] = useState(false);
   const [deleteStatus, setDeleteStatus] = useState<{
     message: string;
     tone: "error" | "success";
@@ -702,6 +703,29 @@ export default function ImpostazioniPage() {
       setDeleteStatus({ message: formatApiErrorMessage(error), tone: "error" });
     } finally {
       setDeleteLoading(false);
+    }
+  }
+
+  async function handleResendDeleteCode() {
+    const token = getBusinessAuthToken();
+    if (!token) {
+      setDeleteStatus({ message: "Sessione scaduta. Accedi di nuovo.", tone: "error" });
+      return;
+    }
+
+    setDeleteResending(true);
+    setDeleteStatus(null);
+
+    try {
+      await businessAuthApi.deleteResendCode(token);
+      setDeleteStatus({
+        message: "Nuovo codice inviato alla tua email.",
+        tone: "success",
+      });
+    } catch (error) {
+      setDeleteStatus({ message: formatApiErrorMessage(error), tone: "error" });
+    } finally {
+      setDeleteResending(false);
     }
   }
 
@@ -1850,14 +1874,24 @@ export default function ImpostazioniPage() {
                             placeholder="Codice OTP"
                             className="h-10 w-full rounded-lg border border-white/20 bg-white/10 px-3 text-[12px] text-white outline-none placeholder:text-white/60"
                           />
-                          <button
-                            type="button"
-                            disabled={deleteLoading}
-                            onClick={() => void handleConfirmDelete()}
-                            className="inline-flex h-10 items-center rounded-lg bg-white px-4 text-[12px] font-semibold text-[#dc2626] hover:cursor-pointer hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-60"
-                          >
-                            {deleteLoading ? "Eliminazione..." : "Conferma eliminazione"}
-                          </button>
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              disabled={deleteLoading}
+                              onClick={() => void handleConfirmDelete()}
+                              className="inline-flex h-10 items-center rounded-lg bg-white px-4 text-[12px] font-semibold text-[#dc2626] hover:cursor-pointer hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {deleteLoading ? "Eliminazione..." : "Conferma eliminazione"}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={deleteResending || deleteLoading}
+                              onClick={() => void handleResendDeleteCode()}
+                              className="inline-flex h-10 items-center rounded-lg border border-white/30 bg-white/10 px-4 text-[12px] font-semibold text-white hover:cursor-pointer hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {deleteResending ? "Invio..." : "Invia di nuovo il codice"}
+                            </button>
+                          </div>
                         </div>
                       )}
                     </div>
