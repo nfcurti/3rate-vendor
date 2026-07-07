@@ -1,38 +1,40 @@
 "use client";
 
 import {
-  Bell,
   ImagePlus,
+  Loader2,
   Plus,
-  ScanLine,
   Trash2,
   Upload,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
 import clsx from "clsx";
-import { DashboardHelpMenu } from "../_components/DashboardHelpMenu";
+import { formatApiErrorMessage } from "@/lib/business-auth";
+import {
+  businessArticlesApi,
+  getShippingOptions,
+  type ShippingOption,
+} from "@/lib/business-articles";
+import type { ProductCategory } from "@/lib/business-info";
+import { uploadBusinessImage } from "@/lib/business-info";
 import { DashboardViewHeader } from "../_components/DashboardViewHeader";
 import { FormDropdown, type FormDropdownOption } from "../_components/FormDropdown";
 import { Sidebar } from "../_components/Sidebar";
 import { ViewTransition } from "../_components/ViewTransition";
-
-const CATEGORY_OPTIONS: FormDropdownOption[] = [
-  { value: "elettronica", label: "Elettronica" },
-  { value: "abbigliamento", label: "Abbigliamento" },
-  { value: "casa", label: "Casa" },
-];
-
-const COURIER_OPTIONS: FormDropdownOption[] = [
-  { value: "brt", label: "BRT" },
-  { value: "gls", label: "GLS" },
-  { value: "poste", label: "Poste Italiane" },
-];
 
 const STATUS_OPTIONS: FormDropdownOption[] = [
   { value: "active", label: "Attivo" },
   { value: "draft", label: "Bozza" },
   { value: "hidden", label: "Nascosto" },
 ];
+
+function parseNumber(value: string) {
+  const normalized = value.replace(",", ".").trim();
+  if (!normalized) return undefined;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
 
 function FieldLabel({ children }: { children: React.ReactNode }) {
   return <div className="mb-1.5 text-[12px] font-semibold text-[#1f2b20]">{children}</div>;
@@ -87,13 +89,29 @@ type VariantRow = {
 type UploadedImage = {
   id: string;
   name: string;
+  file: File;
   sizeLabel: string;
   previewUrl: string;
 };
 
 export default function ScansionaAggiungiPage() {
-  const [category, setCategory] = useState("");
-  const [courier, setCourier] = useState("");
+  const router = useRouter();
+  const [categories, setCategories] = useState<ProductCategory[]>([]);
+  const [shippingOptions, setShippingOptions] = useState<ShippingOption[]>([]);
+  const [metaLoading, setMetaLoading] = useState(true);
+  const [publishing, setPublishing] = useState(false);
+  const [statusMessage, setStatusMessage] = useState<{
+    message: string;
+    tone: "error" | "success";
+  } | null>(null);
+
+  const [productName, setProductName] = useState("");
+  const [shortDescription, setShortDescription] = useState("");
+  const [fullDescription, setFullDescription] = useState("");
+  const [categoryId, setCategoryId] = useState("");
+  const [shippingOptionId, setShippingOptionId] = useState("");
+  const [salePrice, setSalePrice] = useState("");
+  const [stockQuantity, setStockQuantity] = useState("");
   const [productStatus, setProductStatus] = useState("active");
   const [shipping, setShipping] = useState(true);
   const [catalogVisible, setCatalogVisible] = useState(true);
@@ -173,6 +191,7 @@ export default function ScansionaAggiungiPage() {
     const next = validFiles.map((file) => ({
       id: `${file.name}-${file.lastModified}-${Math.random().toString(36).slice(2, 8)}`,
       name: file.name,
+      file,
       sizeLabel: `${(file.size / (1024 * 1024)).toFixed(1)} MB`,
       previewUrl: URL.createObjectURL(file),
     }));
@@ -197,6 +216,111 @@ export default function ScansionaAggiungiPage() {
   }, [uploadedImages]);
 
   useEffect(() => {
+    let cancelled = false;
+
+    async function loadMeta() {
+      setMetaLoading(true);
+      try {
+        const [categoriesPayload, shippingPayload] = await Promise.all([
+          businessArticlesApi.getCategories(),
+          getShippingOptions(),
+        ]);
+        if (cancelled) return;
+        setCategories(categoriesPayload);
+        setShippingOptions(shippingPayload);
+        if (categoriesPayload[0]?._id) setCategoryId(categoriesPayload[0]._id);
+        if (shippingPayload[0]?._id) setShippingOptionId(shippingPayload[0]._id);
+      } catch (error) {
+        if (!cancelled) {
+          setStatusMessage({ message: formatApiErrorMessage(error), tone: "error" });
+        }
+      } finally {
+        if (!cancelled) setMetaLoading(false);
+      }
+    }
+
+    void loadMeta();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const categoryOptions = useMemo(
+    () =>
+      categories.map((item) => ({
+        value: item._id ?? "",
+        label: item.name ?? "Categoria",
+      })),
+    [categories]
+  );
+
+  const shippingOptionsDropdown = useMemo(
+    () =>
+      shippingOptions.map((option) => ({
+        value: option._id ?? "",
+        label: option.name,
+      })),
+    [shippingOptions]
+  );
+
+  function getVariantValue(name: string) {
+    const row = variants.find((variant) => variant.name.toLowerCase() === name.toLowerCase());
+    return row?.selectedValue?.trim() ?? "";
+  }
+
+  async function handlePublish() {
+    setPublishing(true);
+    setStatusMessage(null);
+
+    try {
+      const price = parseNumber(salePrice);
+      const stock = parseNumber(stockQuantity);
+      const description = [productName.trim(), shortDescription.trim(), fullDescription.trim()]
+        .filter(Boolean)
+        .join(" — ");
+
+      if (!productName.trim()) throw new Error("Inserisci il nome del prodotto.");
+      if (price === undefined || price <= 0) throw new Error("Inserisci un prezzo valido.");
+      if (stock === undefined || stock < 0) throw new Error("Inserisci una quantità valida.");
+      if (!categoryId) throw new Error("Seleziona una categoria.");
+      if (!shippingOptionId) {
+        throw new Error("Nessuna opzione di spedizione disponibile.");
+      }
+
+      const imageUrls: string[] = [];
+      for (const image of uploadedImages) {
+        const url = await uploadBusinessImage(image.file);
+        imageUrls.push(url);
+      }
+
+      const colors = getVariantValue("Colore");
+      const size = getVariantValue("Taglia");
+
+      const created = await businessArticlesApi.createListing({
+        description: description || productName.trim(),
+        originalPrice: price,
+        totalStock: stock,
+        categoryIds: [categoryId],
+        shippingOptionIds: shipping ? [shippingOptionId] : [],
+        imagesUrls: imageUrls,
+        colors: colors ? [colors] : [],
+        size,
+      });
+
+      if (productStatus !== "active" && created._id) {
+        await businessArticlesApi.pauseListing(created._id);
+      }
+
+      setStatusMessage({ message: "Prodotto pubblicato con successo.", tone: "success" });
+      router.push("/dashboard/magazzino");
+    } catch (error) {
+      setStatusMessage({ message: formatApiErrorMessage(error), tone: "error" });
+    } finally {
+      setPublishing(false);
+    }
+  }
+
+  useEffect(() => {
     return () => {
       uploadedImagesRef.current.forEach((img) => URL.revokeObjectURL(img.previewUrl));
     };
@@ -212,6 +336,17 @@ export default function ScansionaAggiungiPage() {
           <DashboardViewHeader title="Aggiungi nuovo prodotto" />
 
           <div className="mx-auto w-full max-w-6xl px-4 py-7 lg:px-8">
+            {statusMessage ? (
+              <p
+                className={clsx(
+                  "mb-4 text-xs font-semibold",
+                  statusMessage.tone === "success" ? "text-[#2f6b3c]" : "text-red-600"
+                )}
+              >
+                {statusMessage.message}
+              </p>
+            ) : null}
+
             <div className="rounded-xl bg-[#214e3a] px-6 py-6 text-white shadow-[0_12px_28px_rgba(16,24,16,0.12)]">
               <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div className="min-w-0">
@@ -227,6 +362,13 @@ export default function ScansionaAggiungiPage() {
               <div className="mt-6 flex justify-center sm:justify-end">
                 <button
                   type="button"
+                  onClick={() =>
+                    setStatusMessage({
+                      message:
+                        "Scanner barcode non ancora disponibile: serve un endpoint backend di lookup.",
+                      tone: "error",
+                    })
+                  }
                   className="inline-flex h-11 shrink-0 items-center justify-end rounded-lg bg-[#76C043] px-18 py-3 text-sm font-semibold text-[#14311f] hover:cursor-pointer hover:bg-[#6aad3c]"
                 >
                   Avvia scanner
@@ -249,7 +391,13 @@ export default function ScansionaAggiungiPage() {
                   <div className="mt-5 space-y-4">
                     <div>
                       <FieldLabel>Nome prodotto</FieldLabel>
-                      <input type="text" className={inputClass} placeholder="Es. Cuffie Wireless Pro" />
+                      <input
+                        type="text"
+                        className={inputClass}
+                        placeholder="Es. Cuffie Wireless Pro"
+                        value={productName}
+                        onChange={(event) => setProductName(event.target.value)}
+                      />
                     </div>
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                       <div>
@@ -263,7 +411,13 @@ export default function ScansionaAggiungiPage() {
                     </div>
                     <div>
                       <FieldLabel>Descrizione breve</FieldLabel>
-                      <input type="text" className={inputClass} placeholder="Una riga per il catalogo" />
+                      <input
+                        type="text"
+                        className={inputClass}
+                        placeholder="Una riga per il catalogo"
+                        value={shortDescription}
+                        onChange={(event) => setShortDescription(event.target.value)}
+                      />
                     </div>
                     <div>
                       <FieldLabel>Descrizione completa</FieldLabel>
@@ -271,6 +425,8 @@ export default function ScansionaAggiungiPage() {
                         rows={4}
                         className="min-h-[120px] w-full resize-y rounded-xl border border-black/10 bg-[#F9FAFB] px-3 py-2.5 text-[12px] text-[#1f2b20] outline-none placeholder:text-[#9aa39a] focus:border-[#214e3a]/35 focus:ring-1 focus:ring-[#214e3a]/20"
                         placeholder="Dettagli, specifiche, cosa riceve il cliente…"
+                        value={fullDescription}
+                        onChange={(event) => setFullDescription(event.target.value)}
                       />
                     </div>
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -278,10 +434,10 @@ export default function ScansionaAggiungiPage() {
                         <FieldLabel>Categoria</FieldLabel>
                         <FormDropdown
                           aria-label="Categoria"
-                          placeholder="Seleziona categoria"
-                          options={CATEGORY_OPTIONS}
-                          value={category}
-                          onChange={setCategory}
+                          placeholder={metaLoading ? "Caricamento..." : "Seleziona categoria"}
+                          options={categoryOptions}
+                          value={categoryId}
+                          onChange={setCategoryId}
                         />
                       </div>
                       <div>
@@ -298,7 +454,13 @@ export default function ScansionaAggiungiPage() {
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                       <div>
                         <FieldLabel>Prezzo di vendita</FieldLabel>
-                        <input type="text" className={inputClass} placeholder="€ 0,00" />
+                        <input
+                          type="text"
+                          className={inputClass}
+                          placeholder="€ 0,00"
+                          value={salePrice}
+                          onChange={(event) => setSalePrice(event.target.value)}
+                        />
                       </div>
                       <div>
                         <FieldLabel>Costo unitario</FieldLabel>
@@ -306,7 +468,14 @@ export default function ScansionaAggiungiPage() {
                       </div>
                       <div>
                         <FieldLabel>Quantità in stock</FieldLabel>
-                        <input type="number" className={inputClass} placeholder="0" min={0} />
+                        <input
+                          type="number"
+                          className={inputClass}
+                          placeholder="0"
+                          min={0}
+                          value={stockQuantity}
+                          onChange={(event) => setStockQuantity(event.target.value)}
+                        />
                       </div>
                       <div>
                         <FieldLabel>Soglia scorte basse</FieldLabel>
@@ -336,13 +505,13 @@ export default function ScansionaAggiungiPage() {
                   <h2 className="text-lg font-semibold tracking-tight">Dimensioni e spedizione</h2>
                   <div className="mt-5 space-y-4">
                     <div>
-                      <FieldLabel>Corriere preferito</FieldLabel>
+                      <FieldLabel>Opzione spedizione</FieldLabel>
                       <FormDropdown
-                        aria-label="Corriere preferito"
-                        placeholder="Seleziona corriere"
-                        options={COURIER_OPTIONS}
-                        value={courier}
-                        onChange={setCourier}
+                        aria-label="Opzione spedizione"
+                        placeholder={metaLoading ? "Caricamento..." : "Seleziona opzione"}
+                        options={shippingOptionsDropdown}
+                        value={shippingOptionId}
+                        onChange={setShippingOptionId}
                       />
                     </div>
                     <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -575,9 +744,18 @@ export default function ScansionaAggiungiPage() {
             <div className="mt-10 flex justify-end border-t border-black/5 pt-6">
               <button
                 type="button"
-                className="inline-flex h-12 min-w-[180px] items-center justify-center rounded-xl bg-[#214e3a] px-8 text-[13px] font-semibold text-white hover:cursor-pointer hover:bg-[#1c4332]"
+                disabled={publishing || metaLoading}
+                onClick={() => void handlePublish()}
+                className="inline-flex h-12 min-w-[180px] items-center justify-center gap-2 rounded-xl bg-[#214e3a] px-8 text-[13px] font-semibold text-white hover:cursor-pointer hover:bg-[#1c4332] disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Pubblica prodotto
+                {publishing ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Pubblicazione...
+                  </>
+                ) : (
+                  "Pubblica prodotto"
+                )}
               </button>
             </div>
           </div>

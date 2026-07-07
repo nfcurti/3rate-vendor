@@ -34,7 +34,13 @@ import {
   type ProductCategory,
   type UiDayHours,
 } from "@/lib/business-info";
-import { formatApiErrorMessage, businessAuthApi, getBusinessAuthToken } from "@/lib/business-auth";
+import {
+  formatApiErrorMessage,
+  businessAuthApi,
+  getBusinessAuthToken,
+  logoutBusinessSession,
+} from "@/lib/business-auth";
+import { useRouter } from "next/navigation";
 import {
   businessStripeApi,
   maskStripeAccountId,
@@ -270,7 +276,16 @@ export default function ImpostazioniPage() {
   } | null>(null);
   const [passwordSaving, setPasswordSaving] = useState(false);
 
+  const [showDeleteFlow, setShowDeleteFlow] = useState(false);
+  const [deleteOtp, setDeleteOtp] = useState("");
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const [deleteStatus, setDeleteStatus] = useState<{
+    message: string;
+    tone: "error" | "success";
+  } | null>(null);
+
   const [fattCycle, setFattCycle] = useState<"monthly" | "annual">("monthly");
+  const router = useRouter();
 
   useEffect(() => {
     let cancelled = false;
@@ -637,6 +652,56 @@ export default function ImpostazioniPage() {
       });
     } finally {
       setPasswordSaving(false);
+    }
+  }
+
+  async function handleRequestDelete() {
+    const token = getBusinessAuthToken();
+    if (!token) {
+      setDeleteStatus({ message: "Sessione scaduta. Accedi di nuovo.", tone: "error" });
+      return;
+    }
+
+    setDeleteLoading(true);
+    setDeleteStatus(null);
+
+    try {
+      await businessAuthApi.deleteAccount(token);
+      setShowDeleteFlow(true);
+      setDeleteStatus({
+        message: "Codice di conferma inviato alla tua email.",
+        tone: "success",
+      });
+    } catch (error) {
+      setDeleteStatus({ message: formatApiErrorMessage(error), tone: "error" });
+    } finally {
+      setDeleteLoading(false);
+    }
+  }
+
+  async function handleConfirmDelete() {
+    const token = getBusinessAuthToken();
+    if (!token) {
+      setDeleteStatus({ message: "Sessione scaduta. Accedi di nuovo.", tone: "error" });
+      return;
+    }
+
+    if (!deleteOtp.trim()) {
+      setDeleteStatus({ message: "Inserisci il codice ricevuto via email.", tone: "error" });
+      return;
+    }
+
+    setDeleteLoading(true);
+    setDeleteStatus(null);
+
+    try {
+      await businessAuthApi.validateDelete(deleteOtp.trim(), token);
+      logoutBusinessSession();
+      router.push("/");
+    } catch (error) {
+      setDeleteStatus({ message: formatApiErrorMessage(error), tone: "error" });
+    } finally {
+      setDeleteLoading(false);
     }
   }
 
@@ -1752,13 +1817,50 @@ export default function ImpostazioniPage() {
                       <p className="mt-1 text-[12px] font-semibold text-red-600">Sospendi temporaneamente</p>
                     </button>
 
-                    <button
-                      type="button"
-                      className="w-full rounded-xl bg-[#dc2626] p-4 text-left text-white shadow-sm transition-colors hover:cursor-pointer hover:bg-[#b91c1c] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50 sm:p-5"
-                    >
+                    <div className="w-full rounded-xl bg-[#dc2626] p-4 text-white shadow-sm sm:p-5">
                       <div className="text-[13px] font-bold">Elimina Account</div>
-                      <p className="mt-1 text-[11px] font-medium text-white/90 sm:text-[12px]">Azione permanente</p>
-                    </button>
+                      <p className="mt-1 text-[11px] font-medium text-white/90 sm:text-[12px]">
+                        Azione permanente
+                      </p>
+                      {deleteStatus ? (
+                        <p
+                          className={clsx(
+                            "mt-3 text-[11px] font-semibold",
+                            deleteStatus.tone === "success" ? "text-white" : "text-red-100"
+                          )}
+                        >
+                          {deleteStatus.message}
+                        </p>
+                      ) : null}
+                      {!showDeleteFlow ? (
+                        <button
+                          type="button"
+                          disabled={deleteLoading}
+                          onClick={() => void handleRequestDelete()}
+                          className="mt-4 inline-flex h-10 items-center rounded-lg bg-white px-4 text-[12px] font-semibold text-[#dc2626] hover:cursor-pointer hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {deleteLoading ? "Invio codice..." : "Richiedi eliminazione"}
+                        </button>
+                      ) : (
+                        <div className="mt-4 space-y-3">
+                          <input
+                            type="text"
+                            value={deleteOtp}
+                            onChange={(event) => setDeleteOtp(event.target.value)}
+                            placeholder="Codice OTP"
+                            className="h-10 w-full rounded-lg border border-white/20 bg-white/10 px-3 text-[12px] text-white outline-none placeholder:text-white/60"
+                          />
+                          <button
+                            type="button"
+                            disabled={deleteLoading}
+                            onClick={() => void handleConfirmDelete()}
+                            className="inline-flex h-10 items-center rounded-lg bg-white px-4 text-[12px] font-semibold text-[#dc2626] hover:cursor-pointer hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {deleteLoading ? "Eliminazione..." : "Conferma eliminazione"}
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               ) : tab === "fatturazione" ? (
