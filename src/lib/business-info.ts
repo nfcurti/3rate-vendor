@@ -1,3 +1,4 @@
+import { withApiFallback } from "./api-fallback";
 import { formatApiErrorMessage, getBusinessAuthToken, payohRequest } from "./business-auth";
 
 export type BusinessAccount = {
@@ -338,11 +339,14 @@ export const businessInfoApi = {
       "GET"
     ),
   getSocialLinks: (token?: string) =>
-    payohRequest<UpdateSocialLinksInput>(
-      "/business/info/get_social_links",
-      undefined,
-      token ?? withToken(),
-      "GET"
+    withApiFallback(
+      payohRequest<UpdateSocialLinksInput>(
+        "/business/info/get_social_links",
+        undefined,
+        token ?? withToken(),
+        "GET"
+      ),
+      {}
     ),
   updateSocialLinks: (input: UpdateSocialLinksInput, token?: string) =>
     payohRequest<Record<string, unknown>>(

@@ -61,7 +61,7 @@ const errorMessages: Record<string, string> = {
     "Database non configurato per l'inizializzazione del profilo. Contatta il supporto.",
   STATUSES_FAILED: "Impossibile caricare gli stati spedizione.",
   OPTIONS_FAILED: "Impossibile caricare le opzioni di spedizione.",
-  NOT_FOUND: "Account non trovato.",
+  NOT_FOUND: "Risorsa non trovata.",
   NOT_VALIDATED_ACCOUNT: "Account non ancora verificato.",
 };
 

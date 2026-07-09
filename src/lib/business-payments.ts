@@ -1,4 +1,5 @@
 import { buildQuery, type PaginatedResult, unwrapPaginated } from "./api-pagination";
+import { withApiFallback } from "./api-fallback";
 import { getBusinessAuthToken, payohRequest } from "./business-auth";
 
 const withToken = () => {
@@ -21,6 +22,35 @@ export type Payout = {
 export function formatPayoutMoney(value?: number, currency = "EUR") {
   if (typeof value !== "number" || Number.isNaN(value)) return "—";
   return new Intl.NumberFormat("it-IT", { style: "currency", currency }).format(value);
+}
+
+export function formatEuroAmount(value: unknown, fallbackZero = true) {
+  if (typeof value === "number" && !Number.isNaN(value)) {
+    return new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR" }).format(value);
+  }
+  if (typeof value === "string" && value.trim()) return value;
+  if (fallbackZero) {
+    return new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR" }).format(0);
+  }
+  return "—";
+}
+
+export function getSummaryBalance(summary?: PaymentsSummary | null) {
+  const balance = (summary as { balance?: { available?: number } | null })?.balance;
+  if (balance && typeof balance.available === "number") return balance.available;
+  return 0;
+}
+
+export function getSummaryNetEarnings(summary?: PaymentsSummary | null) {
+  const payload = summary as {
+    totalEarnings?: number;
+    totalSales?: number;
+    commissionDue?: number;
+  };
+  if (typeof payload?.totalEarnings === "number") return payload.totalEarnings;
+  const sales = payload?.totalSales ?? 0;
+  const commission = payload?.commissionDue ?? 0;
+  return Math.max(0, sales - commission);
 }
 
 export function parsePayoutDate(value?: string | Date | null) {
@@ -96,18 +126,24 @@ export const businessPaymentsApi = {
       "GET"
     ),
   getTimeseries: (token?: string) =>
-    payohRequest<{ timeseries: Array<{ month: string; sales: number; earnings: number }> }>(
-      "/business/payments/timeseries",
-      undefined,
-      token ?? withToken(),
-      "GET"
+    withApiFallback(
+      payohRequest<{ timeseries: Array<{ month: string; sales: number; earnings: number }> }>(
+        "/business/payments/timeseries",
+        undefined,
+        token ?? withToken(),
+        "GET"
+      ),
+      { timeseries: [] }
     ),
   getFees: (token?: string) =>
-    payohRequest<Record<string, unknown>>(
-      "/business/payments/fees",
-      undefined,
-      token ?? withToken(),
-      "GET"
+    withApiFallback(
+      payohRequest<Record<string, unknown>>(
+        "/business/payments/fees",
+        undefined,
+        token ?? withToken(),
+        "GET"
+      ),
+      {}
     ),
   getTransactions: async (params?: { page?: number; limit?: number }, token?: string) => {
     const payload = await payohRequest<PaginatedResult<PaymentTransactionRow>>(
@@ -136,11 +172,14 @@ export const businessPaymentsApi = {
       "PUT"
     ),
   getBankAccounts: (token?: string) =>
-    payohRequest<BankAccount[]>(
-      "/business/payments/bank_accounts",
-      undefined,
-      token ?? withToken(),
-      "GET"
+    withApiFallback(
+      payohRequest<BankAccount[]>(
+        "/business/payments/bank_accounts",
+        undefined,
+        token ?? withToken(),
+        "GET"
+      ),
+      []
     ),
   createBankAccount: (input: CreateBankAccountInput, token?: string) =>
     payohRequest<BankAccount>(

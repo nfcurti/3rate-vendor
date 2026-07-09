@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import clsx from "clsx";
 import { formatApiErrorMessage } from "@/lib/business-auth";
+import { statusAlertClass } from "@/lib/api-fallback";
 import {
   businessOrdersApi,
   extractOrdersFromList,
@@ -353,12 +354,7 @@ export default function OrdiniPage() {
 
             <div className="mx-auto w-full max-w-6xl px-4 py-7 lg:px-8">
               {statusMessage ? (
-                <p
-                  className={clsx(
-                    "mb-4 text-xs font-semibold",
-                    statusMessage.tone === "success" ? "text-[#2f6b3c]" : "text-red-600"
-                  )}
-                >
+                <p className={clsx("mb-4", statusAlertClass(statusMessage.tone))}>
                   {statusMessage.message}
                 </p>
               ) : null}

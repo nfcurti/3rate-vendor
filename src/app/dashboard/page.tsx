@@ -16,7 +16,9 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import clsx from "clsx";
 import { formatApiErrorMessage } from "@/lib/business-auth";
+import { statusAlertClass } from "@/lib/api-fallback";
 import {
   articleToProductRow,
   businessArticlesApi,
@@ -28,7 +30,7 @@ import {
   extractOrdersFromList,
   getShippingStatuses,
 } from "@/lib/business-orders";
-import { businessPaymentsApi } from "@/lib/business-payments";
+import { businessPaymentsApi, getSummaryNetEarnings, formatEuroAmount } from "@/lib/business-payments";
 import { businessAnnouncementsApi } from "@/lib/business-announcements";
 import { DashboardViewHeader } from "./_components/DashboardViewHeader";
 import { ProductsTable } from "./_components/ProductsTable";
@@ -43,7 +45,7 @@ function SalesChart({ data }: { data: { day: string; value: number }[] }) {
   if (!mounted) return <div className="h-full w-full" aria-hidden />;
 
   return (
-    <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={280}>
+    <ResponsiveContainer width="100%" height={280} minWidth={0}>
       <BarChart data={data} margin={{ top: 10, right: 18, left: 8, bottom: 0 }}>
         <CartesianGrid stroke="rgba(0,0,0,0.06)" vertical={false} />
         <XAxis
@@ -83,7 +85,7 @@ type MetricCardProps = {
 
 function MetricCard({ label, value, loading }: MetricCardProps & { loading?: boolean }) {
   return (
-    <div className="rounded-lg  bg-white px-5 py-6 shadow-[0_12px_28px_rgba(16,24,16,0.06)]">
+    <div className="rounded-lg bg-white px-4 py-4 shadow-[0_12px_28px_rgba(16,24,16,0.06)] sm:px-5 sm:py-5">
       <div className="text-xs font-medium tracking-wide text-[#6B7280]">
         {label}
       </div>
@@ -142,37 +144,72 @@ export default function DashboardPage() {
   const [salesChart, setSalesChart] = useState<Array<{ month: string; amount: number }>>([]);
   const [latestPayouts, setLatestPayouts] = useState<Record<string, unknown>[]>([]);
 
+  const [dashboardError, setDashboardError] = useState<string | null>(null);
+
   const loadDashboard = useCallback(async () => {
     setDashboardLoading(true);
+    setDashboardError(null);
+
+    const [
+      ordersResult,
+      statusesResult,
+      articlesResult,
+      returnsResult,
+      summaryResult,
+      payoutsResult,
+      announcementsResult,
+      analyticsResult,
+    ] = await Promise.allSettled([
+      businessOrdersApi.getAll({ limit: 100 }),
+      getShippingStatuses(),
+      businessArticlesApi.getListings(),
+      businessOrdersApi.getReturns({ limit: 1 }),
+      businessPaymentsApi.getSummary(),
+      businessPaymentsApi.getPayouts(),
+      businessAnnouncementsApi.list(),
+      businessArticlesApi.getAnalytics(),
+    ]);
+
+    const failures = [
+      ordersResult,
+      statusesResult,
+      articlesResult,
+      returnsResult,
+      summaryResult,
+    ].filter((result) => result.status === "rejected");
+
+    if (failures.length) {
+      setDashboardError(
+        formatApiErrorMessage(
+          failures[0].status === "rejected" ? failures[0].reason : new Error("LOAD_FAILED")
+        )
+      );
+    }
 
     try {
-      const [ordersPayload, statuses, articles, returnsPayload, summaryPayload, payoutsPayload, announcementsPayload, analyticsPayload] =
-        await Promise.all([
-        businessOrdersApi.getAll({ limit: 100 }),
-        getShippingStatuses(),
-        businessArticlesApi.getListings(),
-        businessOrdersApi.getReturns({ limit: 1 }),
-        businessPaymentsApi.getSummary(),
-        businessPaymentsApi.getPayouts(),
-        businessAnnouncementsApi.list(),
-        businessArticlesApi.getAnalytics().catch(() => ({ items: [], byArticleId: {} })),
-      ]);
+      const ordersPayload =
+        ordersResult.status === "fulfilled" ? ordersResult.value : { items: [], pagination: { page: 1, limit: 0, total: 0, totalPages: 1 } };
+      const statuses = statusesResult.status === "fulfilled" ? statusesResult.value : [];
+      const articles = articlesResult.status === "fulfilled" ? articlesResult.value : [];
+      const returnsPayload =
+        returnsResult.status === "fulfilled"
+          ? returnsResult.value
+          : { items: [], pagination: { page: 1, limit: 0, total: 0, totalPages: 1 } };
+      const summaryPayload = summaryResult.status === "fulfilled" ? summaryResult.value : {};
+      const payoutsPayload = payoutsResult.status === "fulfilled" ? payoutsResult.value : [];
+      const announcementsPayload =
+        announcementsResult.status === "fulfilled" ? announcementsResult.value : [];
+      const analyticsPayload =
+        analyticsResult.status === "fulfilled"
+          ? analyticsResult.value
+          : { items: [], byArticleId: {} };
 
       const orders = extractOrdersFromList(ordersPayload.items);
       setOrderStats(computeOrderDashboardStats(orders, statuses));
       setReturnsCount(returnsPayload.pagination.total);
 
-      const earnings =
-        (summaryPayload as any)?.totalEarnings ??
-        (summaryPayload as any)?.total ??
-        (summaryPayload as any)?.lifetimeEarnings;
-      setTotalEarnings(
-        typeof earnings === "number"
-          ? new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR" }).format(earnings)
-          : typeof earnings === "string" && earnings.trim()
-            ? earnings
-            : "—"
-      );
+      const earnings = getSummaryNetEarnings(summaryPayload);
+      setTotalEarnings(formatEuroAmount(earnings));
 
       setLatestPayouts(Array.isArray(payoutsPayload) ? payoutsPayload.slice(0, 2) : []);
       const chart = (summaryPayload as { salesChart?: Array<{ month: string; amount: number }> })
@@ -193,7 +230,7 @@ export default function DashboardPage() {
           .map((article) => articleToProductRow(article, variationCounts, analyticsByArticleId))
       );
     } catch (error) {
-      console.error("[dashboard]", formatApiErrorMessage(error));
+      setDashboardError(formatApiErrorMessage(error));
       setOrderStats({
         toShip: 0,
         forPickup: 0,
@@ -279,6 +316,9 @@ export default function DashboardPage() {
           <DashboardViewHeader title="Panoramica" />
 
           <div className="mx-auto w-full max-w-6xl px-4 py-7 lg:px-8">
+          {dashboardError ? (
+            <p className={clsx("mb-4", statusAlertClass("error"))}>{dashboardError}</p>
+          ) : null}
 
           <section className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <MetricCard label="Guadagno totale" value={totalEarnings} loading={dashboardLoading} />

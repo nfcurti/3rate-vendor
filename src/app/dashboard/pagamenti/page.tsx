@@ -19,11 +19,15 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import clsx from "clsx";
 import { formatApiErrorMessage } from "@/lib/business-auth";
+import { statusAlertClass } from "@/lib/api-fallback";
 import { formatOrderDate } from "@/lib/business-orders";
 import {
   businessPaymentsApi,
+  formatEuroAmount,
   formatPayoutDateShort,
   formatPayoutMoney,
+  getSummaryBalance,
+  getSummaryNetEarnings,
   payoutRelativeLabel,
   type BankAccount,
   type PaymentTransactionRow,
@@ -55,7 +59,7 @@ function KpiCard({
   const isFilled = variant === "filled";
   return (
     <div
-      className={`rounded-2xl px-5 py-5 shadow-[0_12px_28px_rgba(16,24,16,0.06)] ${
+      className={`rounded-2xl px-4 py-4 shadow-[0_12px_28px_rgba(16,24,16,0.06)] sm:px-5 sm:py-5 ${
         isFilled ? "bg-[#214e3a] text-white" : "bg-white text-[#1f2b20]"
       }`}
     >
@@ -77,7 +81,7 @@ function EarningsChart({ data }: { data: { label: string; value: number }[] }) {
   if (!mounted) return <div className="h-full w-full" aria-hidden />;
 
   return (
-    <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={220}>
+    <ResponsiveContainer width="100%" height={220} minWidth={0}>
       <LineChart data={data} margin={{ top: 12, right: 16, left: 0, bottom: 0 }}>
         <CartesianGrid stroke="rgba(0,0,0,0.06)" vertical={false} />
         <XAxis
@@ -156,11 +160,7 @@ export default function PagamentiPage() {
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
 
   function formatMoney(value: unknown) {
-    if (typeof value === "number") {
-      return new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR" }).format(value);
-    }
-    if (typeof value === "string" && value.trim()) return value;
-    return "—";
+    return formatEuroAmount(value);
   }
 
   const transactions = useMemo(() => {
@@ -241,9 +241,9 @@ export default function PagamentiPage() {
     async function load() {
       setLoading(true);
       setStatusMessage(null);
-      try {
-        const [summaryPayload, payoutsPayload, txPayload, feesPayload, tsPayload, banksPayload] =
-          await Promise.all([
+
+      const [summaryResult, payoutsResult, txResult, feesResult, tsResult, banksResult] =
+        await Promise.allSettled([
           businessPaymentsApi.getSummary(),
           businessPaymentsApi.getPayouts(),
           businessPaymentsApi.getTransactions({ page: txnPage, limit: 20 }),
@@ -251,27 +251,42 @@ export default function PagamentiPage() {
           businessPaymentsApi.getTimeseries(),
           businessPaymentsApi.getBankAccounts(),
         ]);
-        if (cancelled) return;
-        setSummary(summaryPayload);
-        setPayouts(Array.isArray(payoutsPayload) ? payoutsPayload : []);
-        setApiTransactions(txPayload.items);
-        setTxnPagination({
-          page: txPayload.pagination.page,
-          totalPages: txPayload.pagination.totalPages,
+
+      if (cancelled) return;
+
+      if (summaryResult.status === "rejected") {
+        setStatusMessage({
+          message: formatApiErrorMessage(summaryResult.reason),
+          tone: "error",
         });
-        setFees(feesPayload);
-        setTimeseries(Array.isArray(tsPayload.timeseries) ? tsPayload.timeseries : []);
-        setBankAccounts(Array.isArray(banksPayload) ? banksPayload : []);
-      } catch (error) {
-        if (!cancelled) {
-          setStatusMessage({ message: formatApiErrorMessage(error), tone: "error" });
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
       }
+
+      const summaryPayload =
+        summaryResult.status === "fulfilled" ? summaryResult.value : ({} as PaymentsSummary);
+      const payoutsPayload = payoutsResult.status === "fulfilled" ? payoutsResult.value : [];
+      const txPayload =
+        txResult.status === "fulfilled"
+          ? txResult.value
+          : { items: [], pagination: { page: 1, limit: 20, total: 0, totalPages: 1 } };
+      const feesPayload = feesResult.status === "fulfilled" ? feesResult.value : {};
+      const tsPayload = tsResult.status === "fulfilled" ? tsResult.value : { timeseries: [] };
+      const banksPayload = banksResult.status === "fulfilled" ? banksResult.value : [];
+
+      setSummary(summaryPayload);
+      setPayouts(Array.isArray(payoutsPayload) ? payoutsPayload : []);
+      setApiTransactions(txPayload.items);
+      setTxnPagination({
+        page: txPayload.pagination.page,
+        totalPages: txPayload.pagination.totalPages,
+      });
+      setFees(feesPayload);
+      setTimeseries(Array.isArray(tsPayload.timeseries) ? tsPayload.timeseries : []);
+      setBankAccounts(Array.isArray(banksPayload) ? banksPayload : []);
     }
 
-    void load();
+    void load().finally(() => {
+      if (!cancelled) setLoading(false);
+    });
     return () => {
       cancelled = true;
     };
@@ -333,31 +348,23 @@ export default function PagamentiPage() {
 
           <div className="mx-auto w-full max-w-6xl px-4 py-7 lg:px-8">
             {statusMessage ? (
-              <p
-                className={clsx(
-                  "mb-4 text-xs font-semibold",
-                  statusMessage.tone === "success" ? "text-[#2f6b3c]" : "text-red-600"
-                )}
-              >
+              <p className={clsx("mb-4", statusAlertClass(statusMessage.tone))}>
                 {statusMessage.message}
               </p>
             ) : null}
             <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <KpiCard
                 label="Saldo disponibile"
-                value={formatMoney(
-                  (summary as { balance?: { available?: number } })?.balance?.available ??
-                    (summary as { totalEarnings?: number })?.totalEarnings
-                )}
+                value={formatMoney(getSummaryBalance(summary))}
                 variant="filled"
               />
               <KpiCard
                 label="Vendite totali"
-                value={formatMoney((summary as { totalSales?: number })?.totalSales)}
+                value={formatMoney((summary as { totalSales?: number })?.totalSales ?? 0)}
               />
               <KpiCard
                 label="Guadagni netti"
-                value={formatMoney((summary as { totalEarnings?: number })?.totalEarnings)}
+                value={formatMoney(getSummaryNetEarnings(summary))}
               />
               <KpiCard
                 label="Commissioni dovute"

@@ -41,6 +41,7 @@ import {
   logoutBusinessSession,
 } from "@/lib/business-auth";
 import { businessBillingApi, type BillingInfo, type BillingInvoice } from "@/lib/business-billing";
+import { statusAlertClass } from "@/lib/api-fallback";
 import { businessNotificationsApi } from "@/lib/business-notifications";
 import {
   businessSubscriptionApi,
@@ -1035,7 +1036,7 @@ export default function ImpostazioniPage() {
               <button
                 type="button"
                 onClick={() => avatarInputRef.current?.click()}
-                disabled={avatarUploading || profileLoading}
+                disabled={avatarUploading}
                 className="inline-flex items-center justify-center rounded-full border border-white/40 bg-white/10 px-5 py-2.5 text-[12px] font-semibold text-white backdrop-blur-sm hover:cursor-pointer hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {avatarUploading ? "Caricamento..." : "Cambia foto"}
@@ -1072,12 +1073,7 @@ export default function ImpostazioniPage() {
 
             <div className="mt-8">
               {profileStatus && tab === "profilo" ? (
-                <p
-                  className={clsx(
-                    "mb-4 text-xs font-semibold",
-                    profileStatus.tone === "success" ? "text-[#2f6b3c]" : "text-red-600"
-                  )}
-                >
+                <p className={clsx("mb-4", statusAlertClass(profileStatus.tone))}>
                   {profileStatus.message}
                 </p>
               ) : null}
@@ -1099,7 +1095,6 @@ export default function ImpostazioniPage() {
                           onChange={(event) =>
                             updateProfileField("ragioneSociale", event.target.value)
                           }
-                          disabled={profileLoading}
                         />
                       </div>
                       <div>
@@ -1110,7 +1105,6 @@ export default function ImpostazioniPage() {
                           onChange={(event) =>
                             updateProfileField("partitaIVA", event.target.value)
                           }
-                          disabled={profileLoading}
                         />
                       </div>
                       <div>
@@ -1121,7 +1115,6 @@ export default function ImpostazioniPage() {
                           onChange={(event) =>
                             updateProfileField("codiceFiscale", event.target.value)
                           }
-                          disabled={profileLoading}
                           placeholder="RSSMRA80A01H501U"
                         />
                       </div>
@@ -1133,7 +1126,6 @@ export default function ImpostazioniPage() {
                           onChange={(event) =>
                             updateProfileField("codiceSDI", event.target.value)
                           }
-                          disabled={profileLoading}
                         />
                       </div>
                       <div>
@@ -1145,7 +1137,6 @@ export default function ImpostazioniPage() {
                           onChange={(event) =>
                             updateProfileField("email", event.target.value)
                           }
-                          disabled={profileLoading}
                         />
                       </div>
                       <div>
@@ -1156,7 +1147,6 @@ export default function ImpostazioniPage() {
                           onChange={(event) =>
                             updateProfileField("pec", event.target.value)
                           }
-                          disabled={profileLoading}
                         />
                       </div>
                       <div>
@@ -1167,7 +1157,6 @@ export default function ImpostazioniPage() {
                           onChange={(event) =>
                             updateProfileField("phoneNumber", event.target.value)
                           }
-                          disabled={profileLoading}
                         />
                       </div>
                       <div>
@@ -1178,7 +1167,6 @@ export default function ImpostazioniPage() {
                           onChange={(event) =>
                             updateProfileField("whatsappNumber", event.target.value)
                           }
-                          disabled={profileLoading}
                         />
                       </div>
                       <div>
@@ -1189,7 +1177,6 @@ export default function ImpostazioniPage() {
                           onChange={(event) =>
                             updateProfileField("fullAddress", event.target.value)
                           }
-                          disabled={profileLoading}
                           placeholder="Via Roma 123"
                         />
                       </div>
@@ -1202,7 +1189,6 @@ export default function ImpostazioniPage() {
                             onChange={(event) =>
                               updateProfileField("cap", event.target.value)
                             }
-                            disabled={profileLoading}
                             placeholder="20121"
                           />
                         </div>
@@ -1214,7 +1200,6 @@ export default function ImpostazioniPage() {
                             onChange={(event) =>
                               updateProfileField("city", event.target.value)
                             }
-                            disabled={profileLoading}
                             placeholder="Milano"
                           />
                         </div>
@@ -1228,7 +1213,7 @@ export default function ImpostazioniPage() {
                             onChange={updateProfileRegion}
                             placeholder="Seleziona regione"
                             aria-label="Regione"
-                            disabled={profileLoading || profileSaving}
+                            disabled={profileSaving}
                           />
                         </div>
                         <div>
@@ -1247,7 +1232,7 @@ export default function ImpostazioniPage() {
                                 : "Seleziona prima la regione"
                             }
                             aria-label="Provincia"
-                            disabled={profileLoading || profileSaving || !profileForm.region}
+                            disabled={profileSaving || !profileForm.region}
                           />
                         </div>
                       </div>
@@ -1258,7 +1243,7 @@ export default function ImpostazioniPage() {
                           rows={5}
                           value={storeDescription}
                           onChange={(event) => setStoreDescription(event.target.value)}
-                          disabled={profileLoading || profileSaving}
+                          disabled={profileSaving}
                           placeholder="Descrivi il tuo negozio, i prodotti e i servizi offerti."
                         />
                       </div>
@@ -1274,7 +1259,7 @@ export default function ImpostazioniPage() {
                               <button
                                 type="button"
                                 onClick={() => removeCategory(categoryId)}
-                                disabled={profileLoading || profileSaving}
+                                disabled={profileSaving}
                                 className="inline-flex shrink-0 rounded-full text-[#214e3a]/70 hover:cursor-pointer hover:bg-[#214e3a]/10 hover:text-[#214e3a] disabled:cursor-not-allowed disabled:opacity-50"
                                 aria-label={`Rimuovi ${getCategoryName(categoryId)}`}
                               >
@@ -1286,7 +1271,7 @@ export default function ImpostazioniPage() {
                             <select
                               autoFocus
                               defaultValue=""
-                              disabled={profileLoading || profileSaving}
+                              disabled={profileSaving}
                               onChange={(event) => {
                                 addCategory(event.target.value);
                                 event.target.value = "";
@@ -1307,7 +1292,7 @@ export default function ImpostazioniPage() {
                             <button
                               type="button"
                               onClick={() => setShowCategoryPicker(true)}
-                              disabled={profileLoading || profileSaving}
+                              disabled={profileSaving}
                               className="inline-flex h-5 items-center justify-center rounded-lg border-2 border-dashed border-[#214e3a]/25 bg-[#fafdfb] px-4 text-[12px] font-semibold text-[#214e3a] hover:cursor-pointer hover:border-[#214e3a]/40 hover:bg-[#f3f7f0] disabled:cursor-not-allowed disabled:opacity-50"
                             >
                               + Aggiungi
@@ -1333,13 +1318,13 @@ export default function ImpostazioniPage() {
                           id="hours-master"
                           checked={hoursEnabled}
                           onChange={setHoursEnabled}
-                          disabled={profileLoading || profileSaving}
+                          disabled={profileSaving}
                         />
                       </div>
                       <ul className="mt-5 space-y-3">
                         {DAYS_IT.map(({ key, label }) => {
                           const row = dayHours[key];
-                          const rowDisabled = !hoursEnabled || profileLoading || profileSaving;
+                          const rowDisabled = !hoursEnabled || profileSaving;
                           const closedRow = !row.open || rowDisabled;
                           return (
                             <li

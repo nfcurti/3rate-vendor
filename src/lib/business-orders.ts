@@ -1,5 +1,5 @@
 import { buildQuery, type PaginatedResult, unwrapPaginated } from "./api-pagination";
-import { getBusinessAuthToken, payohRequest } from "./business-auth";
+import { formatApiErrorMessage, getBusinessAuthToken, payohRequest } from "./business-auth";
 import type { ArticleListing } from "./business-articles";
 
 export type BusinessArticle = ArticleListing;
@@ -179,12 +179,32 @@ export const businessOrdersApi = {
 };
 
 export async function getShippingStatuses(): Promise<ShippingStatus[]> {
-  return payohRequest<ShippingStatus[]>(
-    "/business/shipping_statuses",
-    undefined,
-    withToken(),
-    "GET"
-  );
+  const token = withToken();
+
+  try {
+    return await payohRequest<ShippingStatus[]>(
+      "/business/shipping_statuses",
+      undefined,
+      token,
+      "GET"
+    );
+  } catch {
+    const response = await fetch("/api/business/shipping-statuses", {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    });
+
+    const data = (await response.json().catch(() => ({}))) as {
+      error?: string;
+      payload?: ShippingStatus[];
+    };
+
+    if (!response.ok || data.error) {
+      throw new Error(formatApiErrorMessage(new Error(data.error ?? "STATUSES_FAILED")));
+    }
+
+    return Array.isArray(data.payload) ? data.payload : [];
+  }
 }
 
 export function extractOrdersFromList(items: EnrichedOrderListItem[]): BusinessOrder[] {
