@@ -9,7 +9,9 @@ import {
   businessOrdersApi,
   formatEuro,
   formatOrderDate,
+  formatShippingAddress,
   getArticlePrice,
+  getClientDisplayName,
   getOrderTotal,
   getShippingStatusByCode,
   getShippingStatusById,
@@ -17,6 +19,7 @@ import {
   SHIPPING_STATUS_TAB_MAP,
   type BusinessArticle,
   type BusinessOrder,
+  type EnrichedOrderDetail,
   type ShippingStatus,
   type TrackingProvider,
 } from "@/lib/business-orders";
@@ -35,7 +38,7 @@ export default function OrdineDettaglioPage() {
   const params = useParams<{ orderId: string }>();
   const orderId = decodeURIComponent(params.orderId);
 
-  const [order, setOrder] = useState<BusinessOrder | null>(null);
+  const [orderDetail, setOrderDetail] = useState<EnrichedOrderDetail | null>(null);
   const [statuses, setStatuses] = useState<ShippingStatus[]>([]);
   const [articlesById, setArticlesById] = useState<Map<string, BusinessArticle>>(new Map());
   const [trackingProviders, setTrackingProviders] = useState<TrackingProvider[]>([]);
@@ -60,9 +63,9 @@ export default function OrdineDettaglioPage() {
       setStatusMessage(null);
 
       try {
-        const [ordersPayload, statusesPayload, articlesPayload, providersPayload] =
+        const [orderPayload, statusesPayload, articlesPayload, providersPayload] =
           await Promise.all([
-            businessOrdersApi.getAll(),
+            businessOrdersApi.getOne(orderId),
             getShippingStatuses(),
             businessOrdersApi.getListings(),
             businessOrdersApi.getTrackingProviders(),
@@ -75,13 +78,12 @@ export default function OrdineDettaglioPage() {
           if (article._id) articleMap.set(article._id, article);
         });
 
-        const foundOrder = ordersPayload.find((item) => item._id === orderId) ?? null;
-        setOrder(foundOrder);
+        setOrderDetail(orderPayload ?? null);
         setStatuses(statusesPayload);
         setArticlesById(articleMap);
         setTrackingProviders(providersPayload);
 
-        if (!foundOrder) {
+        if (!orderPayload?.order) {
           setStatusMessage({ message: "Ordine non trovato.", tone: "error" });
         }
       } catch (error) {
@@ -102,6 +104,8 @@ export default function OrdineDettaglioPage() {
     };
   }, [orderId]);
 
+  const order = orderDetail?.order ?? null;
+
   const shippingStatus = useMemo(
     () => getShippingStatusById(statuses, order?.shippingStatusId),
     [order?.shippingStatusId, statuses]
@@ -111,12 +115,12 @@ export default function OrdineDettaglioPage() {
   const total = order ? getOrderTotal(order, articlesById) : 0;
 
   async function reloadOrder() {
-    const [ordersPayload, statusesPayload] = await Promise.all([
-      businessOrdersApi.getAll(),
+    const [orderPayload, statusesPayload] = await Promise.all([
+      businessOrdersApi.getOne(orderId),
       getShippingStatuses(),
     ]);
     setStatuses(statusesPayload);
-    setOrder(ordersPayload.find((item) => item._id === orderId) ?? null);
+    setOrderDetail(orderPayload ?? null);
   }
 
   async function handlePrepare() {
@@ -317,7 +321,10 @@ export default function OrdineDettaglioPage() {
                           Cliente
                         </div>
                         <div className="mt-1 text-[13px] font-semibold text-[#111827]">
-                          {order.clientAccountId}
+                          {getClientDisplayName(orderDetail?.client)}
+                        </div>
+                        <div className="mt-1 text-[11px] text-[#6b7280]">
+                          {orderDetail?.client?.account?.email ?? "—"}
                         </div>
                       </div>
                       <div className="rounded-xl bg-[#f8faf8] p-4 ring-1 ring-black/5">
@@ -325,7 +332,7 @@ export default function OrdineDettaglioPage() {
                           Indirizzo spedizione
                         </div>
                         <div className="mt-1 text-[13px] font-semibold text-[#111827]">
-                          {order.clientShippingAddressId}
+                          {formatShippingAddress(orderDetail?.shippingAddress)}
                         </div>
                       </div>
                     </div>

@@ -7,9 +7,12 @@ import clsx from "clsx";
 import { formatApiErrorMessage } from "@/lib/business-auth";
 import {
   businessOrdersApi,
+  extractOrdersFromList,
   formatEuro,
   formatOrderDate,
+  formatShippingAddress,
   getArticlePrice,
+  getClientDisplayName,
   getOrderTotal,
   getShippingStatusByCode,
   getShippingStatusById,
@@ -17,6 +20,8 @@ import {
   SHIPPING_STATUS_TAB_MAP,
   type BusinessArticle,
   type BusinessOrder,
+  type BusinessReturnRecord,
+  type EnrichedOrderListItem,
   type ShippingStatus,
   type TrackingProvider,
 } from "@/lib/business-orders";
@@ -65,6 +70,8 @@ function getUiStatus(
 export default function OrdiniPage() {
   const [activeTab, setActiveTab] = useState<OrderTab>("Tutti gli Ordini");
   const [orders, setOrders] = useState<BusinessOrder[]>([]);
+  const [orderEnrichment, setOrderEnrichment] = useState<Map<string, EnrichedOrderListItem>>(new Map());
+  const [returns, setReturns] = useState<BusinessReturnRecord[]>([]);
   const [statuses, setStatuses] = useState<ShippingStatus[]>([]);
   const [articlesById, setArticlesById] = useState<Map<string, BusinessArticle>>(new Map());
   const [trackingProviders, setTrackingProviders] = useState<TrackingProvider[]>([]);
@@ -87,20 +94,28 @@ export default function OrdiniPage() {
     setStatusMessage(null);
 
     try {
-      const [ordersPayload, statusesPayload, articlesPayload, providersPayload] =
+      const [ordersPayload, returnsPayload, statusesPayload, articlesPayload, providersPayload] =
         await Promise.all([
-          businessOrdersApi.getAll(),
+          businessOrdersApi.getAll({ limit: 100 }),
+          businessOrdersApi.getReturns({ limit: 100 }),
           getShippingStatuses(),
           businessOrdersApi.getListings(),
           businessOrdersApi.getTrackingProviders(),
         ]);
+
+      const enrichmentMap = new Map<string, EnrichedOrderListItem>();
+      ordersPayload.items.forEach((item) => {
+        if (item.order?._id) enrichmentMap.set(item.order._id, item);
+      });
 
       const articleMap = new Map<string, BusinessArticle>();
       articlesPayload.forEach((article) => {
         if (article._id) articleMap.set(article._id, article);
       });
 
-      setOrders(ordersPayload);
+      setOrders(extractOrdersFromList(ordersPayload.items));
+      setOrderEnrichment(enrichmentMap);
+      setReturns(returnsPayload.items);
       setStatuses(statusesPayload);
       setArticlesById(articleMap);
       setTrackingProviders(providersPayload);
@@ -126,22 +141,19 @@ export default function OrdiniPage() {
       "Da spedire": 0,
       "In transito": 0,
       Consegnati: 0,
-      "Resi/Annullati": 0,
+      "Resi/Annullati": returns.length,
     };
 
     orders.forEach((order) => {
       const uiStatus = getUiStatus(order, statuses);
-      if (uiStatus === "Annullato") {
-        counts["Resi/Annullati"] += 1;
-        return;
-      }
+      if (uiStatus === "Annullato") return;
       if (counts[uiStatus as OrderTab] !== undefined) {
         counts[uiStatus as OrderTab] += 1;
       }
     });
 
     return counts;
-  }, [orders, statuses]);
+  }, [orders, statuses, returns.length]);
 
   const tabs = useMemo(
     () =>
@@ -161,12 +173,14 @@ export default function OrdiniPage() {
   );
 
   const filteredOrders = useMemo(() => {
-    if (activeTab === "Tutti gli Ordini") return orders;
     if (activeTab === "Resi/Annullati") {
-      return orders.filter((order) => getUiStatus(order, statuses) === "Annullato");
+      return returns
+        .map((item) => item.order)
+        .filter((order): order is BusinessOrder => Boolean(order));
     }
+    if (activeTab === "Tutti gli Ordini") return orders;
     return orders.filter((order) => getUiStatus(order, statuses) === activeTab);
-  }, [activeTab, orders, statuses]);
+  }, [activeTab, orders, returns, statuses]);
 
   const visibleOrderIds = filteredOrders
     .map((order) => order._id)
@@ -475,7 +489,11 @@ export default function OrdiniPage() {
                       <tbody className="text-[12px] text-[#1f2b20]">
                         {filteredOrders.map((order) => {
                           const orderId = order._id ?? "";
-                          const uiStatus = getUiStatus(order, statuses);
+                          const enriched = orderId ? orderEnrichment.get(orderId) : undefined;
+                          const uiStatus =
+                            activeTab === "Resi/Annullati"
+                              ? ("Annullato" as const)
+                              : getUiStatus(order, statuses);
                           const total = getOrderTotal(order, articlesById);
 
                           return (
@@ -502,14 +520,14 @@ export default function OrdiniPage() {
 
                               <td className="py-6 pr-4 align-top">
                                 <div className="text-[12px] font-semibold text-[#1f2b20]">
-                                  Cliente
+                                  {getClientDisplayName(enriched?.client)}
                                 </div>
                                 <div className="mt-1 text-[10px] font-semibold text-[#9aa39a]">
-                                  {order.clientAccountId.slice(-8)}
+                                  {enriched?.client?.account?.email ?? order.clientAccountId.slice(-8)}
                                 </div>
                                 <div className="mt-2 flex items-center gap-1 text-[10px] font-semibold text-[#9aa39a]">
                                   <MapPin className="h-3.5 w-3.5 text-[#c0c6c0]" />
-                                  Indirizzo #{order.clientShippingAddressId.slice(-6)}
+                                  {formatShippingAddress(enriched?.shippingAddress)}
                                 </div>
                               </td>
 

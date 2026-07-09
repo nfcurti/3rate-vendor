@@ -17,6 +17,19 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
+import clsx from "clsx";
+import { formatApiErrorMessage } from "@/lib/business-auth";
+import { formatOrderDate } from "@/lib/business-orders";
+import {
+  businessPaymentsApi,
+  formatPayoutDateShort,
+  formatPayoutMoney,
+  payoutRelativeLabel,
+  type BankAccount,
+  type PaymentTransactionRow,
+  type PaymentsSummary,
+  type Payout,
+} from "@/lib/business-payments";
 import {
   CartesianGrid,
   Line,
@@ -127,60 +140,162 @@ export default function PagamentiPage() {
   const [payFrequency, setPayFrequency] = useState<"weekly" | "biweekly" | "monthly">("weekly");
   const [payDay, setPayDay] = useState("venerdi");
   const [payCutoffHour, setPayCutoffHour] = useState("18:00");
+  const [scheduleSaving, setScheduleSaving] = useState(false);
 
-  const transactions = useMemo(
-    () => [
+  const [loading, setLoading] = useState(true);
+  const [statusMessage, setStatusMessage] = useState<{
+    message: string;
+    tone: "error" | "success";
+  } | null>(null);
+  const [summary, setSummary] = useState<PaymentsSummary | null>(null);
+  const [payouts, setPayouts] = useState<Payout[]>([]);
+  const [apiTransactions, setApiTransactions] = useState<PaymentTransactionRow[]>([]);
+  const [txnPagination, setTxnPagination] = useState({ page: 1, totalPages: 1 });
+  const [fees, setFees] = useState<Record<string, unknown> | null>(null);
+  const [timeseries, setTimeseries] = useState<Array<{ month: string; sales: number; earnings: number }>>([]);
+  const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
+
+  function formatMoney(value: unknown) {
+    if (typeof value === "number") {
+      return new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR" }).format(value);
+    }
+    if (typeof value === "string" && value.trim()) return value;
+    return "—";
+  }
+
+  const transactions = useMemo(() => {
+    if (!apiTransactions.length) return [];
+    return apiTransactions.flatMap((row, idx) => {
+      const order = (row as { order?: { orderNumber?: string } }).order;
+      const txs = Array.isArray((row as { transactions?: unknown[] }).transactions)
+        ? ((row as { transactions: unknown[] }).transactions as Record<string, unknown>[])
+        : [row];
+
+      return txs.map((t, tIdx) => {
+        const id =
+          (typeof t._id === "string" && t._id) ||
+          (typeof t.id === "string" && t.id) ||
+          `txn-${idx}-${tIdx}`;
+        const createdAt = t.createdAt || t.date || t.timestamp;
+        const dateStr = typeof createdAt === "string" ? createdAt : "";
+        const amount = t.valueInEur ?? t.amount ?? t.net ?? t.gross ?? t.total;
+        const status = (t.status as string) || "";
+
+        return {
+          id: String(id),
+          date: dateStr ? [formatOrderDate(dateStr), ""] : ["—", ""],
+          client: {
+            initials: "—",
+            name: order?.orderNumber || "—",
+          },
+          product: order?.orderNumber || "Pagamento ordine",
+          amount: formatMoney(amount),
+          status: (status.toLowerCase().includes("refund") || status.toLowerCase().includes("rimb"))
+            ? ("Rimborsato" as const)
+            : ("Completato" as const),
+        };
+      });
+    });
+  }, [apiTransactions]);
+
+  const earningsChartData = useMemo(() => {
+    const points = timeseries.map((point) => {
+      const [, monthNum] = point.month.split("-");
+      const label = monthNum
+        ? new Intl.DateTimeFormat("it-IT", { month: "short" }).format(
+            new Date(2024, Number(monthNum) - 1, 1)
+          )
+        : point.month;
+      return { label, value: Math.round((point.earnings || 0) / 1000) };
+    });
+    if (earningsRange === "6m") return points.slice(-6);
+    if (earningsRange === "30d") return points.slice(-1);
+    return points.slice(-12);
+  }, [timeseries, earningsRange]);
+
+  const feeRows = useMemo(() => {
+    if (!fees) return [];
+    const percent = fees.platformFeePercent;
+    return [
       {
-        id: "#3R-8841Q205",
-        date: ["12 Dic 2024", "12:32"],
-        client: { initials: "MR", name: "Marco Rossi" },
-        product: "Cuffie Wireless Pro",
-        amount: "€149.99",
-        status: "Completato" as const,
+        label: "Commissioni piattaforma",
+        caption: typeof percent === "number" ? `${percent}% sulle vendite` : "Commissione piattaforma",
+        value: formatMoney(fees.platformFees),
       },
       {
-        id: "#3R-8841Q199",
-        date: ["12 Dic 2024", "11:05"],
-        client: { initials: "GB", name: "Giulia Bianchi" },
-        product: "Smart Watch Extreme",
-        amount: "€89.20",
-        status: "Completato" as const,
+        label: "Commissioni in sospeso",
+        caption: "Da fatturare",
+        value: formatMoney(fees.commissionDue),
       },
       {
-        id: "#3R-8841Q156",
-        date: ["11 Dic 2024", "16:18"],
-        client: { initials: "LV", name: "Luca Verdi" },
-        product: "Speaker Bluetooth",
-        amount: "€59.99",
-        status: "Completato" as const,
+        label: "Costi Stripe",
+        caption: "Gateway di pagamento",
+        value: formatMoney(fees.stripeFees ?? 0),
       },
-      {
-        id: "#3R-8841Q132",
-        date: ["10 Dic 2024", "15:23"],
-        client: { initials: "SF", name: "Sara Ferrari" },
-        product: "Tablet 10\" Multimediale",
-        amount: "€129.00",
-        status: "Completato" as const,
-      },
-      {
-        id: "#3R-8841Q098",
-        date: ["09 Dic 2024", "20:31"],
-        client: { initials: "AC", name: "Andrea Conti" },
-        product: "Mouse Gaming Wireless",
-        amount: "€79.99",
-        status: "Rimborsato" as const,
-      },
-      {
-        id: "#3R-8841Q067",
-        date: ["08 Dic 2024", "18:11"],
-        client: { initials: "EM", name: "Elena Marino" },
-        product: "Webcam HD 1080p",
-        amount: "€49.90",
-        status: "Completato" as const,
-      },
-    ],
-    [],
-  );
+    ];
+  }, [fees]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      setLoading(true);
+      setStatusMessage(null);
+      try {
+        const [summaryPayload, payoutsPayload, txPayload, feesPayload, tsPayload, banksPayload] =
+          await Promise.all([
+          businessPaymentsApi.getSummary(),
+          businessPaymentsApi.getPayouts(),
+          businessPaymentsApi.getTransactions({ page: txnPage, limit: 20 }),
+          businessPaymentsApi.getFees(),
+          businessPaymentsApi.getTimeseries(),
+          businessPaymentsApi.getBankAccounts(),
+        ]);
+        if (cancelled) return;
+        setSummary(summaryPayload);
+        setPayouts(Array.isArray(payoutsPayload) ? payoutsPayload : []);
+        setApiTransactions(txPayload.items);
+        setTxnPagination({
+          page: txPayload.pagination.page,
+          totalPages: txPayload.pagination.totalPages,
+        });
+        setFees(feesPayload);
+        setTimeseries(Array.isArray(tsPayload.timeseries) ? tsPayload.timeseries : []);
+        setBankAccounts(Array.isArray(banksPayload) ? banksPayload : []);
+      } catch (error) {
+        if (!cancelled) {
+          setStatusMessage({ message: formatApiErrorMessage(error), tone: "error" });
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [txnPage]);
+
+  async function handleSavePayoutSchedule() {
+    setScheduleSaving(true);
+    setStatusMessage(null);
+    try {
+      const interval =
+        payFrequency === "monthly"
+          ? "monthly"
+          : payFrequency === "biweekly"
+            ? "biweekly"
+            : "weekly";
+      await businessPaymentsApi.updatePayoutSchedule({ interval });
+      setStatusMessage({ message: "Frequenza pagamenti aggiornata.", tone: "success" });
+      setFreqModalOpen(false);
+    } catch (error) {
+      setStatusMessage({ message: formatApiErrorMessage(error), tone: "error" });
+    } finally {
+      setScheduleSaving(false);
+    }
+  }
 
   useEffect(() => {
     function onPointerDown(e: PointerEvent) {
@@ -217,11 +332,37 @@ export default function PagamentiPage() {
           <DashboardViewHeader title="Pagamenti & guadagni" />
 
           <div className="mx-auto w-full max-w-6xl px-4 py-7 lg:px-8">
+            {statusMessage ? (
+              <p
+                className={clsx(
+                  "mb-4 text-xs font-semibold",
+                  statusMessage.tone === "success" ? "text-[#2f6b3c]" : "text-red-600"
+                )}
+              >
+                {statusMessage.message}
+              </p>
+            ) : null}
             <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <KpiCard label="Saldo disponibile" value="€24,856.40" variant="filled" />
-              <KpiCard label="Pagamenti in sospeso" value="€8,420.15" />
-              <KpiCard label="Guadagni mensili" value="€45,320.80" />
-              <KpiCard label="Valore medio ordine" value="€117.05" />
+              <KpiCard
+                label="Saldo disponibile"
+                value={formatMoney(
+                  (summary as { balance?: { available?: number } })?.balance?.available ??
+                    (summary as { totalEarnings?: number })?.totalEarnings
+                )}
+                variant="filled"
+              />
+              <KpiCard
+                label="Vendite totali"
+                value={formatMoney((summary as { totalSales?: number })?.totalSales)}
+              />
+              <KpiCard
+                label="Guadagni netti"
+                value={formatMoney((summary as { totalEarnings?: number })?.totalEarnings)}
+              />
+              <KpiCard
+                label="Commissioni dovute"
+                value={formatMoney((summary as { commissionDue?: number })?.commissionDue)}
+              />
             </section>
 
             <section className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-[1fr_2fr]">
@@ -246,45 +387,49 @@ export default function PagamentiPage() {
                 </div>
 
                 <div className="mt-4 space-y-3">
+                  {payouts[0] ? (
                   <div className="rounded-2xl bg-[#eff6ff] p-4 ring-1 ring-black/5">
                     <div className="flex items-center justify-between">
                       <div className="inline-flex items-center rounded-full bg-[#dbeafe] px-2 py-1 text-[9px] font-semibold leading-none text-[#3b5bcc]">
                         IN ARRIVO
                       </div>
                       <div className="inline-flex items-center rounded-full bg-[#dbeafe] px-2 py-1 text-[9px] font-semibold leading-none text-[#3b5bcc]">
-                        Domani
+                        {payoutRelativeLabel(payouts[0].arrivalDate)}
                       </div>
                     </div>
                     <div className="mt-2 text-md font-semibold text-[#1f2b20]">
-                      €4,420.15
+                      {formatPayoutMoney(payouts[0].amount)}
                     </div>
                     <div className="mt-1 text-xs font-regular text-[#9aa39a]">
-                      Data prevista: 30 Dicembre 2024
-                    </div>
-                    <div className="mt-2 text-xs font-regular text-[#9aa39a]">
-                      Intesa Sanpaolo • 3456
+                      Data prevista: {formatPayoutDateShort(payouts[0].arrivalDate)}
                     </div>
                   </div>
+                  ) : (
+                    <div className="rounded-xl bg-white p-4 ring-1 ring-black/5">
+                      <div className="text-xs font-semibold text-[#6b746c]">
+                        Nessun bonifico programmato.
+                      </div>
+                    </div>
+                  )}
 
+                  {payouts[1] ? (
                   <div className="rounded-xl bg-white p-4 ring-1 ring-black/5">
                     <div className="flex items-center justify-between">
                       <div className="inline-flex items-center rounded-full bg-[#f2f4f2] px-2 py-1 text-[9px] font-semibold leading-none text-[#6b746c]">
                         PROGRAMMATO
                       </div>
                       <div className="inline-flex items-center rounded-full bg-[#f2f4f2] px-2 py-1 text-[9px] font-semibold leading-none text-[#6b746c]">
-                        22 Dicembre
+                        {formatPayoutDateShort(payouts[1].arrivalDate)}
                       </div>
                     </div>
                     <div className="mt-2 text-md font-semibold text-[#1f2b20]">
-                      €400.00
+                      {formatPayoutMoney(payouts[1].amount)}
                     </div>
                     <div className="mt-1 text-xs font-regular text-[#9aa39a]">
-                      Data prevista: 22 Dicembre 2024
-                    </div>
-                    <div className="mt-2 text-xs font-regular text-[#9aa39a]">
-                      Intesa Sanpaolo • 3456
+                      Data prevista: {formatPayoutDateShort(payouts[1].arrivalDate)}
                     </div>
                   </div>
+                  ) : null}
                 </div>
                     <hr className="mt-4 border-0 h-[1px] bg-[#F3F4F6] " style={{ backgroundColor: "#F3F4F6" }} />
                 <div className="mt-5 flex items-center justify-between">
@@ -293,7 +438,12 @@ export default function PagamentiPage() {
                       Frequenza pagamenti
                     </div>
                     <div className="mt-1 text-xs font-regular text-[#9aa39a]">
-                      Settimanale • Ogni Venerdì
+                      {payFrequency === "weekly"
+                        ? "Settimanale"
+                        : payFrequency === "biweekly"
+                          ? "Bisettimanale"
+                          : "Mensile"}{" "}
+                      • {payDay ? `Ogni ${payDay}` : ""} • cutoff {payCutoffHour}
                     </div>
                   </div>
                   <button
@@ -337,42 +487,7 @@ export default function PagamentiPage() {
                 </div>
 
                 <div className="mt-4 h-[220px] w-full">
-                  <EarningsChart
-                    data={
-                      earningsRange === "12m"
-                        ? [
-                            { label: "Gen", value: 10 },
-                            { label: "Feb", value: 12 },
-                            { label: "Mar", value: 11 },
-                            { label: "Apr", value: 13 },
-                            { label: "Mag", value: 14 },
-                            { label: "Giu", value: 13 },
-                            { label: "Lug", value: 15 },
-                            { label: "Ago", value: 16 },
-                            { label: "Set", value: 15 },
-                            { label: "Ott", value: 17 },
-                            { label: "Nov", value: 18 },
-                            { label: "Dic", value: 19 },
-                          ]
-                        : earningsRange === "6m"
-                          ? [
-                              { label: "Lug", value: 15 },
-                              { label: "Ago", value: 16 },
-                              { label: "Set", value: 15 },
-                              { label: "Ott", value: 17 },
-                              { label: "Nov", value: 18 },
-                              { label: "Dic", value: 19 },
-                            ]
-                          : [
-                              { label: "1", value: 11 },
-                              { label: "6", value: 12 },
-                              { label: "12", value: 13 },
-                              { label: "18", value: 14 },
-                              { label: "24", value: 15 },
-                              { label: "30", value: 16 },
-                            ]
-                    }
-                  />
+                  <EarningsChart data={earningsChartData.length ? earningsChartData : [{ label: "—", value: 0 }]} />
                 </div>
               </div>
             </section>
@@ -480,45 +595,20 @@ export default function PagamentiPage() {
                   <button
                     type="button"
                     onClick={() => setTxnPage((p) => Math.max(1, p - 1))}
-                    className="inline-flex h-9 w-9 items-center justify-center rounded-lg   text-[#6b746c] hover:cursor-pointer hover:bg-black/5"
+                    disabled={txnPage <= 1}
+                    className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-[#6b746c] hover:cursor-pointer hover:bg-black/5 disabled:cursor-not-allowed disabled:opacity-40"
                     aria-label="Pagina precedente"
                   >
                     <ChevronLeft className="h-4 w-4" strokeWidth={2.5} />
                   </button>
-
-                  {[1, 2, 3].map((p) => (
-                    <button
-                      key={p}
-                      type="button"
-                      onClick={() => setTxnPage(p)}
-                      className={`inline-flex h-9 w-9 items-center justify-center rounded-lg text-[11px] font-semibold hover:cursor-pointer ${
-                        txnPage === p
-                          ? "bg-[#214e3a] text-white"
-                          : "border border-black/10  text-[#1f2b20] hover:bg-black/5"
-                      }`}
-                    >
-                      {p}
-                    </button>
-                  ))}
-
-                  <div className="px-1 text-[12px] font-semibold text-[#9aa39a]">…</div>
-
+                  <span className="px-2 text-[12px] font-semibold text-[#6b746c]">
+                    Pagina {txnPage} di {txnPagination.totalPages}
+                  </span>
                   <button
                     type="button"
-                    onClick={() => setTxnPage(370)}
-                    className={`inline-flex h-9 w-12 items-center justify-center rounded-lg text-[11px] font-semibold hover:cursor-pointer ${
-                      txnPage === 370
-                        ? "bg-[#214e3a] text-white"
-                        : "border border-black/10  text-[#1f2b20] hover:bg-black/5"
-                    }`}
-                  >
-                    370
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setTxnPage((p) => Math.min(370, p + 1))}
-                    className="inline-flex h-9 w-9 items-center justify-center rounded-xl   text-[#6b746c] hover:cursor-pointer hover:bg-black/5"
+                    onClick={() => setTxnPage((p) => Math.min(txnPagination.totalPages, p + 1))}
+                    disabled={txnPage >= txnPagination.totalPages}
+                    className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-[#6b746c] hover:cursor-pointer hover:bg-black/5 disabled:cursor-not-allowed disabled:opacity-40"
                     aria-label="Pagina successiva"
                   >
                     <ChevronRight className="h-4 w-4" strokeWidth={2.5} />
@@ -537,23 +627,7 @@ export default function PagamentiPage() {
                 </div>
 
                 <div className="mt-5 space-y-2">
-                  {[
-                    {
-                      label: "Commissioni Klarna",
-                      caption: "2.5% per transazione",
-                      value: "€1,133.02",
-                    },
-                    {
-                      label: "Commissioni Gateway",
-                      caption: "1.2% per transazione",
-                      value: "€428.23",
-                    },
-                    {
-                      label: "Costi spedizione",
-                      caption: "Spedizione standard",
-                      value: "€312.48",
-                    },
-                  ].map((row) => (
+                  {(feeRows.length ? feeRows : [{ label: "Nessun dato", caption: "—", value: "—" }]).map((row) => (
                     <div
                       key={row.label}
                       className="flex items-center justify-between gap-4 rounded-xl bg-[#F9FAFB] px-4 py-3 "
@@ -584,7 +658,7 @@ export default function PagamentiPage() {
                       </div>
                     </div>
                     <div className="shrink-0 text-[sm] font-bold tabular-nums text-[#1f2b20]">
-                      €1,873.73
+                      {formatMoney(fees?.totalCosts)}
                     </div>
                   </div>
                 </div>
@@ -599,102 +673,63 @@ export default function PagamentiPage() {
                 </div>
 
                 <div className="mt-5 space-y-3">
-                  <div className="rounded-2xl border border-[#16A34A]/35 bg-[#f3faef] px-4 py-5">
-                    <div className="flex items-start gap-3">
-                      <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-[#16A34A]">
-                        <Building2 className="h-6 w-6 text-white" strokeWidth={1.75} />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="text-[12px] font-semibold text-[#1f2b20]">
-                              Intesa Sanpaolo
-                            </div>
-                            <div className="mt-1 truncate font-mono text-[10px] font-medium text-[#9aa39a]">
-                              IBAN: IT60 X054 2811 1010 0000 0123 456
-                            </div>
-                            <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1">
-                              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-[#16A34A]">
-                                <Check className="h-3.5 w-3.5" strokeWidth={2.5} />
-                                Verificato
-                              </span>
-                              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-[#9aa39a]">
-                                <Calendar className="h-3.5 w-3.5" />
-                                Aggiunto il 15 Gen 2024
-                              </span>
-                            </div>
+                  {bankAccounts.length ? (
+                    bankAccounts.map((account) => (
+                      <div
+                        key={account._id}
+                        className={`rounded-2xl border px-4 py-5 ${
+                          account.isDefault
+                            ? "border-[#16A34A]/35 bg-[#f3faef]"
+                            : "border-black/10 bg-white"
+                        }`}
+                      >
+                        <div className="flex items-start gap-3">
+                          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-[#16A34A]">
+                            <Building2 className="h-6 w-6 text-white" strokeWidth={1.75} />
                           </div>
-                          <div className="flex shrink-0 flex-col items-end gap-3">
-                            <div className="flex items-center gap-1">
-                              <Link
-                                href="/dashboard/pagamenti/conto/intesa-sanpaolo/modifica"
-                                className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-[#f3f4f6] text-[#4b5563] hover:cursor-pointer hover:bg-[#e5e7eb]"
-                                aria-label="Modifica"
-                              >
-                                <Pencil className="h-4 w-4" />
-                              </Link>
-                              <Link
-                                href="/dashboard/pagamenti/conto/intesa-sanpaolo/rimuovi"
-                                className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-[#f3f4f6] text-[#4b5563] hover:cursor-pointer hover:bg-[#e5e7eb]"
-                                aria-label="Elimina"
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Link>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="text-[12px] font-semibold text-[#1f2b20]">
+                                  {account.bankName || "Conto bancario"}
+                                </div>
+                                <div className="mt-1 truncate font-mono text-[10px] font-medium text-[#9aa39a]">
+                                  IBAN: {account.iban || "—"}
+                                </div>
+                                <div className="mt-1 text-[10px] font-semibold text-[#9aa39a]">
+                                  {account.accountHolder || "—"}
+                                </div>
+                              </div>
+                              <div className="flex shrink-0 items-center gap-1">
+                                {account._id ? (
+                                  <>
+                                    <Link
+                                      href={`/dashboard/pagamenti/conto/${account._id}/modifica`}
+                                      className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-[#f3f4f6] text-[#4b5563] hover:cursor-pointer hover:bg-[#e5e7eb]"
+                                      aria-label="Modifica"
+                                    >
+                                      <Pencil className="h-4 w-4" />
+                                    </Link>
+                                    <Link
+                                      href={`/dashboard/pagamenti/conto/${account._id}/rimuovi`}
+                                      className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-[#f3f4f6] text-[#4b5563] hover:cursor-pointer hover:bg-[#e5e7eb]"
+                                      aria-label="Elimina"
+                                    >
+                                      <Trash2 className="h-4 w-4" />
+                                    </Link>
+                                  </>
+                                ) : null}
+                              </div>
                             </div>
-                            <span className="inline-flex items-center rounded-full bg-[#dcfce7] px-3 py-1 text-[9px] font-semibold text-[#166534] ring-1 ring-[#16A34A]/25">
-                              Principale
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="rounded-2xl border border-black/10 bg-white px-4 py-5">
-                    <div className="flex items-start gap-3">
-                      <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-[#16A34A]">
-                        <Building2 className="h-6 w-6 text-white" strokeWidth={1.75} />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="text-[12px] font-semibold text-[#1f2b20]">
-                              UniCredit
-                            </div>
-                            <div className="mt-1 truncate font-mono text-[10px] font-medium text-[#9aa39a]">
-                              IBAN: IT23 Y030 0203 2800 0000 0123 456
-                            </div>
-                            <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1">
-                              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-[#16A34A]">
-                                <Check className="h-3.5 w-3.5" strokeWidth={2.5} />
-                                Verificato
-                              </span>
-                              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-[#9aa39a]">
-                                <Calendar className="h-3.5 w-3.5" />
-                                Aggiunto il 15 Gen 2024
-                              </span>
-                            </div>
-                          </div>
-                          <div className="flex shrink-0 items-center gap-1">
-                            <Link
-                              href="/dashboard/pagamenti/conto/unicredit/modifica"
-                              className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-[#f3f4f6] text-[#4b5563] hover:cursor-pointer hover:bg-[#e5e7eb]"
-                              aria-label="Modifica"
-                            >
-                              <Pencil className="h-4 w-4" />
-                            </Link>
-                            <Link
-                              href="/dashboard/pagamenti/conto/unicredit/rimuovi"
-                              className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-[#f3f4f6] text-[#4b5563] hover:cursor-pointer hover:bg-[#e5e7eb]"
-                              aria-label="Elimina"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Link>
                           </div>
                         </div>
                       </div>
+                    ))
+                  ) : (
+                    <div className="rounded-xl bg-[#F9FAFB] px-4 py-6 text-center text-[12px] text-[#6b7280]">
+                      Nessun conto bancario registrato.
                     </div>
-                  </div>
+                  )}
                 </div>
 
                 <Link
@@ -813,10 +848,11 @@ export default function PagamentiPage() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => setFreqModalOpen(false)}
-                      className="inline-flex h-10 items-center rounded-xl bg-[#214e3a] px-4 text-[12px] font-semibold text-white hover:cursor-pointer hover:bg-[#1a3f2e]"
+                      disabled={scheduleSaving}
+                      onClick={() => void handleSavePayoutSchedule()}
+                      className="inline-flex h-10 items-center rounded-xl bg-[#214e3a] px-4 text-[12px] font-semibold text-white hover:cursor-pointer hover:bg-[#1a3f2e] disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      Salva impostazioni
+                      {scheduleSaving ? "Salvataggio..." : "Salva impostazioni"}
                     </button>
                   </div>
                 </motion.div>

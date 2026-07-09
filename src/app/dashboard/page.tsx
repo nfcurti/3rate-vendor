@@ -25,8 +25,11 @@ import {
 import {
   businessOrdersApi,
   computeOrderDashboardStats,
+  extractOrdersFromList,
   getShippingStatuses,
 } from "@/lib/business-orders";
+import { businessPaymentsApi } from "@/lib/business-payments";
+import { businessAnnouncementsApi } from "@/lib/business-announcements";
 import { DashboardViewHeader } from "./_components/DashboardViewHeader";
 import { ProductsTable } from "./_components/ProductsTable";
 import { Sidebar } from "./_components/Sidebar";
@@ -133,27 +136,61 @@ export default function DashboardPage() {
   });
   const [activeListingsCount, setActiveListingsCount] = useState(0);
   const [productRows, setProductRows] = useState<ReturnType<typeof articleToProductRow>[]>([]);
+  const [returnsCount, setReturnsCount] = useState(0);
+  const [totalEarnings, setTotalEarnings] = useState("—");
+  const [announcements, setAnnouncements] = useState<Record<string, unknown>[]>([]);
+  const [salesChart, setSalesChart] = useState<Array<{ month: string; amount: number }>>([]);
+  const [latestPayouts, setLatestPayouts] = useState<Record<string, unknown>[]>([]);
 
   const loadDashboard = useCallback(async () => {
     setDashboardLoading(true);
 
     try {
-      const [orders, statuses, articles] = await Promise.all([
-        businessOrdersApi.getAll(),
+      const [ordersPayload, statuses, articles, returnsPayload, summaryPayload, payoutsPayload, announcementsPayload, analyticsPayload] =
+        await Promise.all([
+        businessOrdersApi.getAll({ limit: 100 }),
         getShippingStatuses(),
         businessArticlesApi.getListings(),
+        businessOrdersApi.getReturns({ limit: 1 }),
+        businessPaymentsApi.getSummary(),
+        businessPaymentsApi.getPayouts(),
+        businessAnnouncementsApi.list(),
+        businessArticlesApi.getAnalytics().catch(() => ({ items: [], byArticleId: {} })),
       ]);
 
+      const orders = extractOrdersFromList(ordersPayload.items);
       setOrderStats(computeOrderDashboardStats(orders, statuses));
+      setReturnsCount(returnsPayload.pagination.total);
+
+      const earnings =
+        (summaryPayload as any)?.totalEarnings ??
+        (summaryPayload as any)?.total ??
+        (summaryPayload as any)?.lifetimeEarnings;
+      setTotalEarnings(
+        typeof earnings === "number"
+          ? new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR" }).format(earnings)
+          : typeof earnings === "string" && earnings.trim()
+            ? earnings
+            : "—"
+      );
+
+      setLatestPayouts(Array.isArray(payoutsPayload) ? payoutsPayload.slice(0, 2) : []);
+      const chart = (summaryPayload as { salesChart?: Array<{ month: string; amount: number }> })
+        ?.salesChart;
+      setSalesChart(Array.isArray(chart) ? chart : []);
+      setAnnouncements(Array.isArray(announcementsPayload) ? announcementsPayload.slice(0, 3) : []);
 
       const activeArticles = articles.filter((article) => article.isActive);
       setActiveListingsCount(activeArticles.length);
 
       const variationCounts = getVariationCounts(articles);
+      const analyticsByArticleId =
+        (analyticsPayload.byArticleId as Record<string, import("@/lib/business-articles").ArticleAnalyticsEntry>) ??
+        {};
       setProductRows(
         activeArticles
           .slice(0, 4)
-          .map((article) => articleToProductRow(article, variationCounts))
+          .map((article) => articleToProductRow(article, variationCounts, analyticsByArticleId))
       );
     } catch (error) {
       console.error("[dashboard]", formatApiErrorMessage(error));
@@ -166,6 +203,11 @@ export default function DashboardPage() {
       });
       setActiveListingsCount(0);
       setProductRows([]);
+      setReturnsCount(0);
+      setTotalEarnings("—");
+      setSalesChart([]);
+      setAnnouncements([]);
+      setLatestPayouts([]);
     } finally {
       setDashboardLoading(false);
     }
@@ -180,27 +222,25 @@ export default function DashboardPage() {
       { label: "In attesa di spedizione", value: String(orderStats.toShip) },
       { label: "In attesa di ritiro", value: String(orderStats.forPickup) },
       { label: "Spediti (ultimi 7gg)", value: String(orderStats.shippedLast7Days) },
-      { label: "Richieste di reso", value: "0" },
+      { label: "Richieste di reso", value: String(returnsCount) },
     ],
-    [orderStats]
+    [orderStats, returnsCount]
   );
 
   const salesData = useMemo(() => {
-    // Placeholder data until wired to real metrics.
-    const base = [
-      { day: "Lun", value: 1200 },
-      { day: "Mar", value: 1900 },
-      { day: "Mer", value: 1500 },
-      { day: "Gio", value: 2200 },
-      { day: "Ven", value: 1800 },
-      { day: "Sab", value: 2800 },
-      { day: "Dom", value: 2400 },
-    ];
-
-    if (salesRangeDays === 7) return base;
-    if (salesRangeDays === 30) return base;
-    return base;
-  }, [salesRangeDays]);
+    if (salesChart.length) {
+      return salesChart.slice(-7).map((point) => {
+        const [, monthNum] = point.month.split("-");
+        const monthLabel = monthNum
+          ? new Intl.DateTimeFormat("it-IT", { month: "short" }).format(
+              new Date(2024, Number(monthNum) - 1, 1)
+            )
+          : point.month;
+        return { day: monthLabel, value: Math.round(point.amount) };
+      });
+    }
+    return [{ day: "—", value: 0 }];
+  }, [salesChart, salesRangeDays]);
 
   useEffect(() => {
     function onPointerDown(e: PointerEvent) {
@@ -241,7 +281,7 @@ export default function DashboardPage() {
           <div className="mx-auto w-full max-w-6xl px-4 py-7 lg:px-8">
 
           <section className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <MetricCard label="Guadagno totale" value="—" loading={dashboardLoading} />
+            <MetricCard label="Guadagno totale" value={totalEarnings} loading={dashboardLoading} />
             <MetricCard
               label="Ordini da spedire"
               value={String(orderStats.toShip)}
@@ -310,33 +350,27 @@ export default function DashboardPage() {
               </div>
                 <hr className="mt-2 border-0 h-[1px] bg-[#F3F4F6]" style={{ backgroundColor: "#F3F4F6" }} />
               <div className="mt-4 space-y-3 text-sm">
-                <div className="border-l-2 border-[#76C043] pl-2">
-                  <div className="text-xs font-regular text-[#9aa39a]">
-                    10 Febbraio 2026
+                {dashboardLoading ? (
+                  <div className="flex items-center justify-center py-10">
+                    <Loader2 className="h-5 w-5 animate-spin text-[#214e3a]" />
                   </div>
-                  <div className="mt-1 text-sm font-medium leading-snug text-[#1f2b20]">
-                    Aggiornamento commissioni per la categoria Elettronica a partire
-                    da Marzo.
-                  </div>
-                </div>
-                <div className="border-l-2 border-[#76C043] pl-2">
-                  <div className="text-xs font-regular text-[#9aa39a]">
-                    9 Febbraio 2026
-                  </div>
-                  <div className="mt-1 text-sm font-medium leading-snug text-[#1f2b20]">
-                    Aggiornamento documentazione per le categorie Elettronica a
-                    partire da Marzo.
-                  </div>
-                </div>
-                <div className="border-l-2 border-[#E5E7EB] pl-2">
-                  <div className="text-xs font-regular text-[#9aa39a]">
-                    05 Febbraio 2026
-                  </div>
-                  <div className="mt-1 text-sm font-medium leading-snug text-[#1f2b20]">
-                    Nuove funzionalità di spedizione espresso disponibili per tutti
-                    i venditori.
-                  </div>
-                </div>
+                ) : announcements.length ? (
+                  announcements.map((row, idx) => (
+                    <div
+                      key={String((row as any)._id ?? (row as any).id ?? idx)}
+                      className={idx === 0 ? "border-l-2 border-[#76C043] pl-2" : "border-l-2 border-[#E5E7EB] pl-2"}
+                    >
+                      <div className="text-xs font-regular text-[#9aa39a]">
+                        {String((row as any).date ?? (row as any).createdAt ?? "—")}
+                      </div>
+                      <div className="mt-1 text-sm font-medium leading-snug text-[#1f2b20]">
+                        {String((row as any).title ?? (row as any).message ?? (row as any).body ?? "Novità")}
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="text-xs font-semibold text-[#6b746c]">Nessuna novità.</div>
+                )}
               </div>
             </div>
 
@@ -354,31 +388,39 @@ export default function DashboardPage() {
               </div>
               <hr className="mt-2 border-0 h-[1px] bg-[#F3F4F6]" style={{ backgroundColor: "#F3F4F6" }} />
               <div className="mt-4 space-y-3 text-sm">
-                {[
-                  { name: "Bonifico Klarna", when: "Oggi, 10:30", amount: "+€850.00" },
-                  { name: "Bonifico Klarna", when: "Ieri, 14:15", amount: "+€320.50" },
-                  { name: "Bonifico Klarna", when: "Ieri, 11:15", amount: "+€170.00" },
-                  { name: "Bonifico Klarna", when: "Ieri, 9:15", amount: "+€201.50" },
-                ].map((row) => (
-                  <div
-                    key={`${row.name}-${row.when}`}
-                    className="flex items-center justify-between"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="flex h-7 w-7 items-center justify-center rounded-full bg-[#DCFCE7] text-[#2f6b3c] ring-1 ring-[#5DBE54]/15">
-                        <ChevronDown className="h-4 w-4 text-[#2f6b3c]" />
-                   
-                      </div>
-                      <div>
-                        <div className="font-medium">{row.name}</div>
-                        <div className="text-xs font-semibold text-[#9aa39a]">
-                          {row.when}
-                        </div>
-                      </div>
-                    </div>
-                    <div className="font-semibold text-[#16A34A]">{row.amount}</div>
+                {dashboardLoading ? (
+                  <div className="flex items-center justify-center py-10">
+                    <Loader2 className="h-5 w-5 animate-spin text-[#214e3a]" />
                   </div>
-                ))}
+                ) : latestPayouts.length ? (
+                  latestPayouts.map((row, idx) => {
+                    const key = String((row as any).id ?? (row as any)._id ?? idx);
+                    const name = String((row as any).type ?? (row as any).name ?? "Bonifico");
+                    const when = String((row as any).arrivalDate ?? (row as any).date ?? (row as any).createdAt ?? "—");
+                    const amountRaw = (row as any).amount ?? (row as any).net;
+                    const amount =
+                      typeof amountRaw === "number"
+                        ? new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR" }).format(amountRaw)
+                        : String(amountRaw ?? "—");
+
+                    return (
+                      <div key={key} className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="flex h-7 w-7 items-center justify-center rounded-full bg-[#DCFCE7] text-[#2f6b3c] ring-1 ring-[#5DBE54]/15">
+                            <ChevronDown className="h-4 w-4 text-[#2f6b3c]" />
+                          </div>
+                          <div>
+                            <div className="font-medium">{name}</div>
+                            <div className="text-xs font-semibold text-[#9aa39a]">{when}</div>
+                          </div>
+                        </div>
+                        <div className="font-semibold text-[#16A34A]">{`+${amount}`}</div>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="text-xs font-semibold text-[#6b746c]">Nessun accredito.</div>
+                )}
               </div>
             </div>
           </section>

@@ -40,6 +40,13 @@ import {
   getBusinessAuthToken,
   logoutBusinessSession,
 } from "@/lib/business-auth";
+import { businessBillingApi, type BillingInfo, type BillingInvoice } from "@/lib/business-billing";
+import { businessNotificationsApi } from "@/lib/business-notifications";
+import {
+  businessSubscriptionApi,
+  type CurrentSubscription,
+  type SubscriptionPlan,
+} from "@/lib/business-subscription";
 import { useRouter } from "next/navigation";
 import {
   businessStripeApi,
@@ -263,9 +270,38 @@ export default function ImpostazioniPage() {
   const [notifEsaurito, setNotifEsaurito] = useState(true);
   const [notifNovita, setNotifNovita] = useState(true);
   const [notifNewsletter, setNotifNewsletter] = useState(false);
+  const [notifSaving, setNotifSaving] = useState(false);
+  const [notifStatus, setNotifStatus] = useState<{
+    message: string;
+    tone: "error" | "success";
+  } | null>(null);
+  const [suspendLoading, setSuspendLoading] = useState(false);
 
   const [secProfiloPubblico, setSecProfiloPubblico] = useState(true);
   const [secGeolocalizzazione, setSecGeolocalizzazione] = useState(true);
+  const [socialLinks, setSocialLinks] = useState({
+    instagram: "",
+    facebook: "",
+    tiktok: "",
+    website: "",
+  });
+  const [socialSaving, setSocialSaving] = useState(false);
+  const [socialStatus, setSocialStatus] = useState<{
+    message: string;
+    tone: "error" | "success";
+  } | null>(null);
+
+  const [privacySaving, setPrivacySaving] = useState(false);
+  const [privacyStatus, setPrivacyStatus] = useState<{
+    message: string;
+    tone: "error" | "success";
+  } | null>(null);
+
+  const [exportLoading, setExportLoading] = useState(false);
+  const [exportStatus, setExportStatus] = useState<{
+    message: string;
+    tone: "error" | "success";
+  } | null>(null);
   const [showPasswordForm, setShowPasswordForm] = useState(false);
   const [oldPassword, setOldPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -286,7 +322,25 @@ export default function ImpostazioniPage() {
   } | null>(null);
 
   const [fattCycle, setFattCycle] = useState<"monthly" | "annual">("monthly");
+  const [fattLoading, setFattLoading] = useState(false);
+  const [subscriptionPlans, setSubscriptionPlans] = useState<SubscriptionPlan[]>([]);
+  const [currentSubscription, setCurrentSubscription] = useState<CurrentSubscription>(null);
+  const [billingInvoices, setBillingInvoices] = useState<BillingInvoice[]>([]);
+  const [billingSummary, setBillingSummary] = useState<BillingInfo>({});
+  const [fattStatus, setFattStatus] = useState<{
+    message: string;
+    tone: "error" | "success";
+  } | null>(null);
+  const [fattActionLoading, setFattActionLoading] = useState(false);
   const router = useRouter();
+
+  const visiblePlans = useMemo(() => {
+    const interval = fattCycle === "monthly" ? "month" : "year";
+    const filtered = subscriptionPlans.filter((plan) => plan.interval === interval);
+    return filtered.length ? filtered : subscriptionPlans;
+  }, [subscriptionPlans, fattCycle]);
+
+  const activePlanId = currentSubscription?.subscription?.planId ?? currentSubscription?.plan?._id;
 
   useEffect(() => {
     let cancelled = false;
@@ -363,6 +417,19 @@ export default function ImpostazioniPage() {
           openingHoursFromApi(openingHoursPayload);
         setHoursEnabled(enabled);
         setDayHours(loadedDayHours);
+
+        const social =
+          info?.socialLinks && Object.keys(info.socialLinks).length
+            ? info.socialLinks
+            : await businessInfoApi.getSocialLinks().catch(() => ({}));
+        if (!cancelled) {
+          setSocialLinks({
+            instagram: normalizeLoadedField((social as { instagram?: string }).instagram),
+            facebook: normalizeLoadedField((social as { facebook?: string }).facebook),
+            tiktok: normalizeLoadedField((social as { tiktok?: string }).tiktok),
+            website: normalizeLoadedField((social as { website?: string }).website),
+          });
+        }
       } catch (error) {
         if (!cancelled) {
           setProfileStatus({
@@ -381,6 +448,93 @@ export default function ImpostazioniPage() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (tab !== "notifiche") return;
+    let cancelled = false;
+    async function loadPrefs() {
+      try {
+        const prefs = await businessNotificationsApi.getPreferences();
+        if (cancelled) return;
+        setNotifOrdineNuovo(prefs.orders ?? true);
+        setNotifReso(prefs.returns ?? true);
+        setNotifPagamentoRicevuto(prefs.payouts ?? true);
+        setNotifNovita(!(prefs.marketing ?? false));
+        setNotifNewsletter(prefs.marketing ?? false);
+      } catch {
+        // keep defaults
+      }
+    }
+    void loadPrefs();
+    return () => {
+      cancelled = true;
+    };
+  }, [tab]);
+
+  useEffect(() => {
+    if (tab !== "fatturazione") return;
+    let cancelled = false;
+
+    async function loadFatturazione() {
+      setFattLoading(true);
+      setFattStatus(null);
+      try {
+        const [plans, current, invoices, billingInfo] = await Promise.all([
+          businessSubscriptionApi.getPlans(),
+          businessSubscriptionApi.getCurrent(),
+          businessBillingApi.getInvoices(),
+          businessBillingApi.getInfo(),
+        ]);
+        if (cancelled) return;
+        setSubscriptionPlans(Array.isArray(plans) ? plans : []);
+        setCurrentSubscription(current);
+        setBillingInvoices(Array.isArray(invoices) ? invoices : []);
+        setBillingSummary((billingInfo ?? {}) as BillingInfo);
+      } catch (error) {
+        if (!cancelled) {
+          setFattStatus({ message: formatApiErrorMessage(error), tone: "error" });
+        }
+      } finally {
+        if (!cancelled) setFattLoading(false);
+      }
+    }
+
+    void loadFatturazione();
+    return () => {
+      cancelled = true;
+    };
+  }, [tab]);
+
+  async function handleChangePlan(planId: string) {
+    if (!planId || planId === activePlanId) return;
+    setFattActionLoading(true);
+    setFattStatus(null);
+    try {
+      await businessSubscriptionApi.changePlan(planId);
+      const current = await businessSubscriptionApi.getCurrent();
+      setCurrentSubscription(current);
+      setFattStatus({ message: "Piano aggiornato con successo.", tone: "success" });
+    } catch (error) {
+      setFattStatus({ message: formatApiErrorMessage(error), tone: "error" });
+    } finally {
+      setFattActionLoading(false);
+    }
+  }
+
+  async function handleCancelSubscription() {
+    if (!window.confirm("Vuoi cancellare l'abbonamento?")) return;
+    setFattActionLoading(true);
+    setFattStatus(null);
+    try {
+      await businessSubscriptionApi.cancel();
+      setCurrentSubscription(null);
+      setFattStatus({ message: "Abbonamento cancellato.", tone: "success" });
+    } catch (error) {
+      setFattStatus({ message: formatApiErrorMessage(error), tone: "error" });
+    } finally {
+      setFattActionLoading(false);
+    }
+  }
 
   async function loadStripeConnectStatus() {
     setStripeLoading(true);
@@ -726,6 +880,91 @@ export default function ImpostazioniPage() {
       setDeleteStatus({ message: formatApiErrorMessage(error), tone: "error" });
     } finally {
       setDeleteResending(false);
+    }
+  }
+
+  async function handleSaveSocialLinks() {
+    setSocialSaving(true);
+    setSocialStatus(null);
+    try {
+      await businessInfoApi.updateSocialLinks({
+        instagram: socialLinks.instagram.trim(),
+        facebook: socialLinks.facebook.trim(),
+        tiktok: socialLinks.tiktok.trim(),
+        website: socialLinks.website.trim(),
+      });
+      setSocialStatus({ message: "Link social aggiornati.", tone: "success" });
+    } catch (error) {
+      setSocialStatus({ message: formatApiErrorMessage(error), tone: "error" });
+    } finally {
+      setSocialSaving(false);
+    }
+  }
+
+  async function handleSavePrivacy() {
+    setPrivacySaving(true);
+    setPrivacyStatus(null);
+    try {
+      await businessInfoApi.updatePrivacySettings({
+        profileVisible: secProfiloPubblico,
+        showEmail: true,
+        showPhone: true,
+        showGeolocation: secGeolocalizzazione,
+      });
+      setPrivacyStatus({ message: "Impostazioni privacy aggiornate.", tone: "success" });
+    } catch (error) {
+      setPrivacyStatus({ message: formatApiErrorMessage(error), tone: "error" });
+    } finally {
+      setPrivacySaving(false);
+    }
+  }
+
+  async function handleSaveNotificationPreferences() {
+    setNotifSaving(true);
+    setNotifStatus(null);
+    try {
+      await businessNotificationsApi.putPreferences({
+        orders: notifOrdineNuovo,
+        returns: notifReso,
+        payouts: notifPagamentoRicevuto,
+        marketing: notifNewsletter || notifNovita,
+      });
+      setNotifStatus({ message: "Preferenze notifiche salvate.", tone: "success" });
+    } catch (error) {
+      setNotifStatus({ message: formatApiErrorMessage(error), tone: "error" });
+    } finally {
+      setNotifSaving(false);
+    }
+  }
+
+  async function handleSuspendAccount() {
+    setSuspendLoading(true);
+    try {
+      await businessInfoApi.suspendAccount();
+      logoutBusinessSession();
+      router.push("/");
+    } catch (error) {
+      setExportStatus({ message: formatApiErrorMessage(error), tone: "error" });
+    } finally {
+      setSuspendLoading(false);
+    }
+  }
+
+  async function handleExportData() {
+    setExportLoading(true);
+    setExportStatus(null);
+    try {
+      const payload = await businessInfoApi.exportData();
+      // Backend might return a URL or inline JSON; show a generic success message.
+      const url = typeof (payload as any)?.url === "string" ? (payload as any).url : null;
+      if (url && typeof window !== "undefined") {
+        window.open(url, "_blank", "noopener,noreferrer");
+      }
+      setExportStatus({ message: "Export avviato. Controlla il download.", tone: "success" });
+    } catch (error) {
+      setExportStatus({ message: formatApiErrorMessage(error), tone: "error" });
+    } finally {
+      setExportLoading(false);
     }
   }
 
@@ -1150,31 +1389,41 @@ export default function ImpostazioniPage() {
                       <h2 className="text-[15px] font-bold tracking-tight text-[#111827]">
                         Social media e sito
                       </h2>
+                      {socialStatus ? (
+                        <p
+                          className={clsx(
+                            "mt-3 text-xs font-semibold",
+                            socialStatus.tone === "success" ? "text-[#2f6b3c]" : "text-red-600"
+                          )}
+                        >
+                          {socialStatus.message}
+                        </p>
+                      ) : null}
                       <div className="mt-5 space-y-4">
                         {(
                           [
                             {
                               logo: "/social/instagram.png",
                               label: "Instagram",
-                              defaultValue: "@techstoremilano",
+                              key: "instagram" as const,
                             },
                             {
                               logo: "/social/facebook.png",
                               label: "Facebook",
-                              defaultValue: "facebook.com/techstoremilano",
+                              key: "facebook" as const,
                             },
                             {
                               logo: "/social/tiktok.png",
                               label: "TikTok",
-                              defaultValue: "@techstoremilano",
+                              key: "tiktok" as const,
                             },
                             {
                               logo: "/social/website.png",
                               label: "Sito web",
-                              defaultValue: "https://www.techstoremilano.it",
+                              key: "website" as const,
                             },
                           ] as const
-                        ).map(({ logo, label, defaultValue }) => (
+                        ).map(({ logo, label, key }) => (
                           <div key={label}>
                             <div className="mb-1.5 flex items-center ">
                               <span className="relative flex h-9 w-9 shrink-0 items-center justify-start">
@@ -1188,9 +1437,25 @@ export default function ImpostazioniPage() {
                               </span>
                               <span className="text-[12px] font-semibold text-[#1f2b20]">{label}</span>
                             </div>
-                            <input className={inputClass} defaultValue={defaultValue} />
+                            <input
+                              className={inputClass}
+                              value={socialLinks[key]}
+                              onChange={(event) =>
+                                setSocialLinks((prev) => ({ ...prev, [key]: event.target.value }))
+                              }
+                            />
                           </div>
                         ))}
+                      </div>
+                      <div className="mt-5 flex justify-end">
+                        <button
+                          type="button"
+                          disabled={socialSaving}
+                          onClick={() => void handleSaveSocialLinks()}
+                          className="inline-flex h-10 items-center rounded-xl bg-[#214e3a] px-4 text-[12px] font-semibold text-white hover:cursor-pointer hover:bg-[#1a3f2e] disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {socialSaving ? "Salvataggio..." : "Salva social"}
+                        </button>
                       </div>
                     </section>
                   </div>
@@ -1477,7 +1742,7 @@ export default function ImpostazioniPage() {
                         </span>
                         <div className="min-w-0">
                           <div className="text-[13px] font-semibold text-[#111827]">Email</div>
-                          <div className="truncate text-[11px] text-[#6b7280]">info@techstoremilano.it</div>
+                          <div className="truncate text-[11px] text-[#6b7280]">{profileForm.email || "—"}</div>
                         </div>
                       </div>
                       <Toggle
@@ -1627,6 +1892,26 @@ export default function ImpostazioniPage() {
                         </li>
                       </ul>
                     </section>
+                  </div>
+                  <div className="flex justify-end">
+                    {notifStatus ? (
+                      <p
+                        className={clsx(
+                          "mr-4 self-center text-xs font-semibold",
+                          notifStatus.tone === "success" ? "text-[#2f6b3c]" : "text-red-600"
+                        )}
+                      >
+                        {notifStatus.message}
+                      </p>
+                    ) : null}
+                    <button
+                      type="button"
+                      disabled={notifSaving}
+                      onClick={() => void handleSaveNotificationPreferences()}
+                      className="inline-flex h-10 items-center rounded-xl bg-[#214e3a] px-4 text-[12px] font-semibold text-white hover:cursor-pointer hover:bg-[#1a3f2e] disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {notifSaving ? "Salvataggio..." : "Salva preferenze"}
+                    </button>
                   </div>
                 </div>
               ) : tab === "sicurezza" ? (
@@ -1797,6 +2082,16 @@ export default function ImpostazioniPage() {
                   <div className="flex min-w-0 flex-col gap-4">
                     <section className="rounded-2xl border border-black/[0.06] bg-white p-5 shadow-sm sm:p-6">
                       <h2 className="text-[15px] font-bold tracking-tight text-[#111827]">Privacy e permessi</h2>
+                      {privacyStatus ? (
+                        <p
+                          className={clsx(
+                            "mt-3 text-xs font-semibold",
+                            privacyStatus.tone === "success" ? "text-[#2f6b3c]" : "text-red-600"
+                          )}
+                        >
+                          {privacyStatus.message}
+                        </p>
+                      ) : null}
                       <ul className="mt-4 flex flex-col gap-3">
                         <li className="flex items-center justify-between gap-3 rounded-xl bg-[#F8F9FA] px-4 py-3">
                           <div className="min-w-0">
@@ -1821,10 +2116,33 @@ export default function ImpostazioniPage() {
                           />
                         </li>
                       </ul>
+                      <div className="mt-4 flex justify-end">
+                        <button
+                          type="button"
+                          disabled={privacySaving}
+                          onClick={() => void handleSavePrivacy()}
+                          className="inline-flex h-10 items-center rounded-xl bg-[#214e3a] px-4 text-[12px] font-semibold text-white hover:cursor-pointer hover:bg-[#1a3f2e] disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {privacySaving ? "Salvataggio..." : "Salva privacy"}
+                        </button>
+                      </div>
                     </section>
+
+                    {exportStatus ? (
+                      <p
+                        className={clsx(
+                          "text-xs font-semibold",
+                          exportStatus.tone === "success" ? "text-[#2f6b3c]" : "text-red-600"
+                        )}
+                      >
+                        {exportStatus.message}
+                      </p>
+                    ) : null}
 
                     <button
                       type="button"
+                      disabled={exportLoading}
+                      onClick={() => void handleExportData()}
                       className="w-full rounded-xl border border-[#76C043]/45 bg-[#f3faf0] p-4 text-left shadow-sm transition-colors hover:cursor-pointer hover:border-[#76C043]/70 hover:bg-[#e6f4e0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#214e3a]/30 sm:p-5"
                     >
                       <div className="text-[13px] font-bold text-[#214e3a]">Scarica i miei dati</div>
@@ -1835,7 +2153,9 @@ export default function ImpostazioniPage() {
 
                     <button
                       type="button"
-                      className="w-full rounded-xl border border-red-200 bg-[#fff5f5] p-4 text-left shadow-sm transition-colors hover:cursor-pointer hover:border-red-300 hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/40 sm:p-5"
+                      disabled={suspendLoading}
+                      onClick={() => void handleSuspendAccount()}
+                      className="w-full rounded-xl border border-red-200 bg-[#fff5f5] p-4 text-left shadow-sm transition-colors hover:cursor-pointer hover:border-red-300 hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/40 sm:p-5 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       <div className="text-[13px] font-bold text-[#111827]">Disattiva Account</div>
                       <p className="mt-1 text-[12px] font-semibold text-red-600">Sospendi temporaneamente</p>
@@ -1899,36 +2219,75 @@ export default function ImpostazioniPage() {
                 </div>
               ) : tab === "fatturazione" ? (
                 <div className="space-y-5">
+                  {fattStatus ? (
+                    <p
+                      className={clsx(
+                        "rounded-xl px-4 py-3 text-[12px] font-semibold",
+                        fattStatus.tone === "success"
+                          ? "bg-[#ecf8eb] text-[#2d4f36]"
+                          : "bg-red-50 text-red-700"
+                      )}
+                    >
+                      {fattStatus.message}
+                    </p>
+                  ) : null}
                   <div className="grid grid-cols-1 gap-5 lg:grid-cols-5 lg:items-stretch">
                     {/* Piano attuale */}
                     <section className="flex lg:col-span-3 min-w-0 flex-col rounded-[24px] bg-[linear-gradient(135deg,#2E4F38_0%,#3D6B4F_100%)] p-6 text-white shadow-[0_2px_6px_rgba(17,24,39,0.08)] sm:p-7">
                       <div className="flex items-center justify-between gap-3">
                         <h2 className="text-md font-bold tracking-tight">Piano attuale</h2>
                         <span className="shrink-0 rounded-full bg-[#7CCB42] px-4 py-1.5 text-sm font-extrabold uppercase tracking-tight text-[#29553a]">
-                          Attivo
+                          {currentSubscription?.subscription?.status === "active"
+                            ? "Attivo"
+                            : currentSubscription?.subscription?.status ?? "Nessun piano"}
                         </span>
                       </div>
                       <div className="mt-6 flex flex-col gap-2 rounded-lg bg-white/12 px-6 py-5 ring-1 ring-white/10 sm:flex-row sm:items-center sm:justify-between">
-                        <div className="text-sm font-semibold text-white/95">Prossimo pagamento</div>
-                        <div className="text-sm font-medium text-white/75">Addebito il 15 Maggio 2024</div>
-                        <div className="text-2xl font-bold tabular-nums tracking-tight text-white">€149,00</div>
+                        <div className="text-sm font-semibold text-white/95">
+                          {currentSubscription?.plan?.name ?? "Nessun abbonamento attivo"}
+                        </div>
+                        <div className="text-sm font-medium text-white/75">
+                          {currentSubscription?.subscription?.currentPeriodEnd
+                            ? `Prossimo addebito: ${new Intl.DateTimeFormat("it-IT", {
+                                day: "numeric",
+                                month: "long",
+                                year: "numeric",
+                              }).format(new Date(currentSubscription.subscription.currentPeriodEnd))}`
+                            : "—"}
+                        </div>
+                        <div className="text-2xl font-bold tabular-nums tracking-tight text-white">
+                          {typeof currentSubscription?.plan?.priceEur === "number"
+                            ? new Intl.NumberFormat("it-IT", {
+                                style: "currency",
+                                currency: "EUR",
+                              }).format(currentSubscription.plan.priceEur)
+                            : "—"}
+                        </div>
                       </div>
                       <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
                         <button
                           type="button"
-                          className="inline-flex items-center justify-center rounded-[14px] bg-[#5e816d] px-4 py-3 text-[10px] font-semibold text-white transition-colors hover:cursor-pointer hover:bg-[#678a75]"
+                          disabled={fattActionLoading || fattLoading}
+                          onClick={() => {
+                            const next = visiblePlans.find((plan) => plan._id !== activePlanId);
+                            if (next?._id) void handleChangePlan(next._id);
+                          }}
+                          className="inline-flex items-center justify-center rounded-[14px] bg-[#5e816d] px-4 py-3 text-[10px] font-semibold text-white transition-colors hover:cursor-pointer hover:bg-[#678a75] disabled:cursor-not-allowed disabled:opacity-60"
                         >
                           Modifica piano
                         </button>
                         <button
                           type="button"
-                          className="inline-flex items-center justify-center rounded-[14px] bg-[#5e816d] px-4 py-3 text-[10px] font-semibold text-white transition-colors hover:cursor-pointer hover:bg-[#678a75]"
+                          disabled={fattActionLoading || fattLoading}
+                          className="inline-flex items-center justify-center rounded-[14px] bg-[#5e816d] px-4 py-3 text-[10px] font-semibold text-white transition-colors hover:cursor-pointer hover:bg-[#678a75] disabled:cursor-not-allowed disabled:opacity-60"
                         >
                           Modifica metodo pagamento
                         </button>
                         <button
                           type="button"
-                          className="inline-flex items-center justify-center rounded-[14px] bg-[#5e816d] px-4 py-3 text-[10px] font-semibold text-white transition-colors hover:cursor-pointer hover:bg-[#678a75]"
+                          disabled={fattActionLoading || fattLoading || !currentSubscription}
+                          onClick={() => void handleCancelSubscription()}
+                          className="inline-flex items-center justify-center rounded-[14px] bg-[#5e816d] px-4 py-3 text-[10px] font-semibold text-white transition-colors hover:cursor-pointer hover:bg-[#678a75] disabled:cursor-not-allowed disabled:opacity-60"
                         >
                           Cancella abbonamento
                         </button>
@@ -1943,8 +2302,14 @@ export default function ImpostazioniPage() {
                       </h2>
                       <div className="mt-6 flex items-center justify-between gap-3 rounded-[16px] border border-[#E5E7EB] bg-[#F9FAFB] px-6 py-5">
                         <div className="min-w-0">
-                          <div className="text-md font-semibold text-[#111827]">Mastercard •••• 8821</div>
-                          <div className="mt-1 text-sm text-[#667085]">Scadenza: 12/2025</div>
+                          <div className="text-md font-semibold text-[#111827]">
+                            {currentSubscription?.subscription?.stripeSubscriptionId
+                              ? "Metodo di pagamento Stripe"
+                              : "Nessun metodo configurato"}
+                          </div>
+                          <div className="mt-1 text-sm text-[#667085]">
+                            Gestito tramite Stripe al momento del cambio piano.
+                          </div>
                         </div>
                         <button
                           type="button"
@@ -2001,94 +2366,71 @@ export default function ImpostazioniPage() {
                     </div>
 
                     <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
-                      {(
-                        [
-                          {
-                            id: "starter",
-                            name: "Starter",
-                            priceM: 49,
-                            priceA: Math.round(49 * 0.8),
-                            features: [
-                              "Fino a 100 referenze prodotto",
-                              "Dashboard vendite essenziale",
-                              "Supporto via email",
-                            ],
-                            cta: "Seleziona" as const,
-                            highlight: false,
-                          },
-                          {
-                            id: "pro",
-                            name: "Professional",
-                            priceM: 79,
-                            priceA: Math.round(79 * 0.8),
-                            features: [
-                              "Referenze prodotto illimitate",
-                              "Analytics e report avanzati",
-                              "Supporto prioritario",
-                            ],
-                            cta: "Piano attivo" as const,
-                            highlight: true,
-                          },
-                          {
-                            id: "bold",
-                            name: "Bold",
-                            priceM: 139,
-                            priceA: Math.round(139 * 0.8),
-                            features: [
-                              "API e integrazioni dedicate",
-                              "Account manager dedicato",
-                              "SLA e uptime garantiti",
-                            ],
-                            cta: "Seleziona" as const,
-                            highlight: false,
-                          },
-                        ] as const
-                      ).map((plan) => {
-                        const price = fattCycle === "monthly" ? plan.priceM : plan.priceA;
-                        const suffix = fattCycle === "monthly" ? "/mese" : "/mese";
-                        return (
+                      {fattLoading ? (
+                        <div className="col-span-full flex items-center justify-center py-12 text-[#6b7280]">
+                          <Loader2 className="mr-2 size-5 animate-spin" />
+                          Caricamento piani...
+                        </div>
+                      ) : visiblePlans.length ? (
+                        visiblePlans.map((plan) => {
+                          const isActive = plan._id === activePlanId;
+                          const price = plan.priceEur ?? 0;
+                          return (
                           <div
-                            key={plan.id}
+                            key={plan._id ?? plan.code}
                             className={clsx(
                               "flex flex-col rounded-2xl border p-5 sm:p-6",
-                              plan.highlight
+                              isActive
                                 ? "border-[#76C043] bg-[#F0FDF4] border-2"
                                 : "border-black/[0.08] bg-white",
                             )}
                           >
                             <div className="text-[14px] font-bold text-[#111827]">{plan.name}</div>
                             <div className="mt-2 flex items-baseline gap-1">
-                              <span className="text-[26px] font-bold tabular-nums text-[#111827]">€{price}</span>
-                              <span className="text-[12px] font-regular text-[#6b7280]">{suffix}</span>
+                              <span className="text-[26px] font-bold tabular-nums text-[#111827]">
+                                {new Intl.NumberFormat("it-IT", {
+                                  style: "currency",
+                                  currency: "EUR",
+                                  maximumFractionDigits: 0,
+                                }).format(price)}
+                              </span>
+                              <span className="text-[12px] font-regular text-[#6b7280]">/mese</span>
                             </div>
                             <ul className="mt-4 flex flex-col gap-2.5">
-                              {plan.features.map((f) => (
-                                <li key={f} className="flex gap-2 text-[11px] leading-snug text-[#374151] sm:text-[12px]">
+                              {(plan.features ?? []).map((feature) => (
+                                <li key={feature} className="flex gap-2 text-[11px] leading-snug text-[#374151] sm:text-[12px]">
                                   <CheckCircle2
                                     className="mt-0.5 h-4 w-4 shrink-0 text-[#76C043]"
                                     strokeWidth={2.25}
                                   />
-                                  <span>{f}</span>
+                                  <span>{feature}</span>
                                 </li>
                               ))}
                             </ul>
                             <div className="mt-6">
-                              {plan.highlight ? (
+                              {isActive ? (
                                 <div className="w-full rounded-xl bg-[#76C043] py-2.5 text-center text-[12px] font-semibold text-[#ffffff]">
                                   Piano attivo
                                 </div>
                               ) : (
                                 <button
                                   type="button"
-                                  className="w-full rounded-lg border-2 border-[#111827] bg-white py-2.5 text-[12px] font-semibold text-[#111827] hover:cursor-pointer hover:bg-[#fafafa]"
+                                  disabled={fattActionLoading || !plan._id}
+                                  onClick={() => plan._id && void handleChangePlan(plan._id)}
+                                  className="w-full rounded-lg border-2 border-[#111827] bg-white py-2.5 text-[12px] font-semibold text-[#111827] hover:cursor-pointer hover:bg-[#fafafa] disabled:cursor-not-allowed disabled:opacity-60"
                                 >
                                   Seleziona
                                 </button>
                               )}
                             </div>
                           </div>
-                        );
-                      })}
+                          );
+                        })
+                      ) : (
+                        <div className="col-span-full rounded-2xl border border-black/[0.08] bg-white p-8 text-center text-[13px] text-[#6b7280]">
+                          Nessun piano disponibile.
+                        </div>
+                      )}
                     </div>
                   </section>
 
@@ -2111,42 +2453,35 @@ export default function ImpostazioniPage() {
                             </tr>
                           </thead>
                           <tbody>
-                            {(
-                              [
-                                {
-                                  num: "INV-2024-0415",
-                                  date: "15 Apr 2024",
-                                  desc: "Piano Professional - Abbonamento mensile",
-                                  amount: "€79,00",
-                                },
-                                {
-                                  num: "INV-2024-0315",
-                                  date: "15 Mar 2024",
-                                  desc: "Piano Professional - Abbonamento mensile",
-                                  amount: "€79,00",
-                                },
-                                {
-                                  num: "INV-2024-0215",
-                                  date: "15 Feb 2024",
-                                  desc: "Piano Professional - Abbonamento mensile",
-                                  amount: "€79,00",
-                                },
-                                {
-                                  num: "INV-2024-0115",
-                                  date: "15 Gen 2024",
-                                  desc: "Piano Professional - Abbonamento mensile",
-                                  amount: "€79,00",
-                                },
-                              ] as const
-                            ).map((inv) => (
-                              <tr key={inv.num} className="border-b border-black/[0.05] last:border-0">
-                                <td className="whitespace-nowrap px-4 py-3 font-mono font-medium text-[#111827]">
-                                  {inv.num}
+                            {fattLoading ? (
+                              <tr>
+                                <td colSpan={6} className="px-4 py-8 text-center text-[#6b7280]">
+                                  <Loader2 className="mx-auto mb-2 size-5 animate-spin" />
+                                  Caricamento fatture...
                                 </td>
-                                <td className="whitespace-nowrap px-4 py-3 text-[#374151]">{inv.date}</td>
-                                <td className="max-w-[200px] px-4 py-3 text-[#374151]">{inv.desc}</td>
+                              </tr>
+                            ) : billingInvoices.length ? (
+                              billingInvoices.map((inv) => {
+                                const amount =
+                                  typeof inv.totalCommission === "number"
+                                    ? new Intl.NumberFormat("it-IT", {
+                                        style: "currency",
+                                        currency: "EUR",
+                                      }).format(inv.totalCommission)
+                                    : "—";
+                                return (
+                              <tr key={inv.period ?? amount} className="border-b border-black/[0.05] last:border-0">
+                                <td className="whitespace-nowrap px-4 py-3 font-mono font-medium text-[#111827]">
+                                  {inv.period ?? "—"}
+                                </td>
+                                <td className="whitespace-nowrap px-4 py-3 text-[#374151]">
+                                  {inv.period ?? "—"}
+                                </td>
+                                <td className="max-w-[200px] px-4 py-3 text-[#374151]">
+                                  Commissioni piattaforma
+                                </td>
                                 <td className="whitespace-nowrap px-4 py-3 font-semibold tabular-nums text-[#111827]">
-                                  {inv.amount}
+                                  {amount}
                                 </td>
                                 <td className="px-4 py-3">
                                   <span className="inline-flex rounded-full bg-[#ecf8eb] px-2.5 py-0.5 text-[10px] font-semibold text-[#2d4f36] ">
@@ -2172,7 +2507,15 @@ export default function ImpostazioniPage() {
                                   </div>
                                 </td>
                               </tr>
-                            ))}
+                                );
+                              })
+                            ) : (
+                              <tr>
+                                <td colSpan={6} className="px-4 py-8 text-center text-[#6b7280]">
+                                  Nessuna fattura disponibile.
+                                </td>
+                              </tr>
+                            )}
                           </tbody>
                         </table>
                       </div>
@@ -2208,21 +2551,23 @@ export default function ImpostazioniPage() {
                       <dl className="mt-5 space-y-3">
                         {(
                           [
-                            ["Ragione sociale", "Tech Store Milano S.r.l."],
-                            ["Partita IVA", "IT12345678901"],
-                            ["Codice fiscale", "12345678901"],
-                            ["Codice SDI", "ABCDE12"],
-                            ["Indirizzo", "Via Roma 123"],
-                            ["Città", "Milano"],
-                            ["CAP", "20121"],
-                            ["Provincia", "Milano (MI)"],
+                            ["Ragione sociale", billingSummary.ragioneSociale],
+                            ["Partita IVA", billingSummary.partitaIVA],
+                            ["Codice fiscale", billingSummary.codiceFiscale],
+                            ["Codice SDI", billingSummary.codiceSDI],
+                            ["Indirizzo", billingSummary.fullAddress],
+                            ["Città", billingSummary.city],
+                            ["CAP", billingSummary.cap],
+                            ["Provincia", billingSummary.province],
                           ] as const
                         ).map(([k, v]) => (
                           <div key={k}>
                             <dt className="text-[10px] font-semibold uppercase tracking-wide text-[#9ca3af]">
                               {k}
                             </dt>
-                            <dd className="mt-0.5 text-[13px] font-medium text-[#111827]">{v}</dd>
+                            <dd className="mt-0.5 text-[13px] font-medium text-[#111827]">
+                              {v?.trim() ? v : "—"}
+                            </dd>
                           </div>
                         ))}
                       </dl>

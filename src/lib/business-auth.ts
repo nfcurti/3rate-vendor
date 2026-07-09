@@ -123,7 +123,7 @@ export async function payohRequest<T>(
   path: string,
   body?: Record<string, unknown>,
   token?: string | null,
-  method: "POST" | "GET" = "POST"
+  method: "POST" | "GET" | "PUT" | "PATCH" | "DELETE" = "POST"
 ) {
   const apiBaseUrl = resolveApiBaseUrl();
 
@@ -142,7 +142,10 @@ export async function payohRequest<T>(
         "ngrok-skip-browser-warning": "true",
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
-      body: method === "POST" && body ? JSON.stringify(body) : undefined,
+      body:
+        (method === "POST" || method === "PUT" || method === "PATCH") && body
+          ? JSON.stringify(body)
+          : undefined,
     });
 
   const readJsonResponse = async (currentResponse: Response) => {

@@ -134,28 +134,29 @@ export const businessArticlesApi = {
       { reviewId },
       token ?? withToken()
     ),
+  getAnalytics: (token?: string) =>
+    payohRequest<Record<string, unknown>>(
+      "/business/article/analytics",
+      undefined,
+      token ?? withToken(),
+      "GET"
+    ),
+  lookupBarcode: (barcode: string, token?: string) =>
+    payohRequest<Record<string, unknown>>(
+      `/business/article/lookup_barcode?barcode=${encodeURIComponent(barcode)}`,
+      undefined,
+      token ?? withToken(),
+      "GET"
+    ),
 };
 
 export async function getShippingOptions(): Promise<ShippingOption[]> {
-  const token = getBusinessAuthToken();
-  if (!token) throw new Error("Sessione scaduta. Accedi di nuovo.");
-
-  const response = await fetch("/api/business/shipping-options", {
-    headers: { Authorization: `Bearer ${token}` },
-    cache: "no-store",
-  });
-
-  const data = (await response.json().catch(() => ({}))) as {
-    result?: boolean;
-    payload?: ShippingOption[];
-    error?: string;
-  };
-
-  if (!response.ok || data.error || !data.payload) {
-    throw new Error(data.error || "Impossibile caricare le opzioni di spedizione.");
-  }
-
-  return data.payload;
+  return payohRequest<ShippingOption[]>(
+    "/business/shipping_options/get",
+    undefined,
+    withToken(),
+    "GET"
+  );
 }
 
 export function formatArticleDate(value?: string) {
@@ -193,9 +194,16 @@ export function getVariationCounts(articles: ArticleListing[]) {
   return counts;
 }
 
+export type ArticleAnalyticsEntry = {
+  sales?: number;
+  views?: number;
+  rank?: number;
+};
+
 export function articleToProductRow(
   article: ArticleListing,
-  variationCounts: Map<string, number>
+  variationCounts: Map<string, number>,
+  analyticsByArticleId?: Record<string, ArticleAnalyticsEntry>
 ): ProductRow {
   const articleId = article._id ?? "";
   const isOutOfStock = article.availableStock <= 0;
@@ -208,6 +216,7 @@ export function articleToProductRow(
   const groupId = article.articleWithVariationGroupId;
   const variantCount = groupId ? variationCounts.get(groupId) ?? 0 : 0;
   const price = getArticlePrice(article);
+  const analytics = articleId ? analyticsByArticleId?.[articleId] : undefined;
 
   return {
     ...status,
@@ -218,10 +227,10 @@ export function articleToProductRow(
     variants: variantCount > 1 ? `+${variantCount - 1} Varianti` : undefined,
     imageUrl: article.imagesUrls?.[0],
     perf: [
-      ["Vendite:", "—"],
-      ["Unità vendute:", "—"],
-      ["Visualizzazioni:", "—"],
-      ["Rank:", "—"],
+      ["Vendite:", analytics?.sales != null ? String(analytics.sales) : "—"],
+      ["Unità vendute:", analytics?.sales != null ? String(analytics.sales) : "—"],
+      ["Visualizzazioni:", analytics?.views != null ? String(analytics.views) : "—"],
+      ["Rank:", analytics?.rank != null ? `#${analytics.rank}` : "—"],
     ],
     inv: [
       ["Disponibili:", String(article.availableStock)],

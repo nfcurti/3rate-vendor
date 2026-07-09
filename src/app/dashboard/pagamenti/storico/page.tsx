@@ -15,6 +15,15 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { formatApiErrorMessage } from "@/lib/business-auth";
+import {
+  businessPaymentsApi,
+  formatPayoutDateLong,
+  formatPayoutMoney,
+  parsePayoutDate,
+  payoutStatusKind,
+  type Payout,
+} from "@/lib/business-payments";
 import { DashboardViewHeader } from "../../_components/DashboardViewHeader";
 import { Sidebar } from "../../_components/Sidebar";
 import { ViewTransition } from "../../_components/ViewTransition";
@@ -91,23 +100,6 @@ function KpiCard({
   );
 }
 
-const DEMO_EVENTS: Record<string, Record<number, DayMeta>> = {
-  "2024-11": {
-    29: { kind: "scheduled", amount: "€2,100" },
-  },
-  "2024-12": {
-    1: { kind: "received", amount: "€9,240" },
-    8: { kind: "received", amount: "€9,240" },
-    15: { kind: "incoming", amount: "€8,420" },
-    22: { kind: "scheduled", amount: "€6,800" },
-    29: { kind: "scheduled", amount: "€5,200" },
-  },
-};
-
-function monthKey(y: number, m: number) {
-  return `${y}-${String(m + 1).padStart(2, "0")}`;
-}
-
 function splitAccreditoCell(accredito: string) {
   const lastComma = accredito.lastIndexOf(", ");
   if (lastComma === -1) return { dateLine: accredito, time: "" as string };
@@ -146,116 +138,102 @@ function ProssimoPagamentoBankIcon({ className }: { className?: string }) {
   );
 }
 
+function buildMonthEvents(payouts: Payout[], year: number, monthIndex: number) {
+  const events: Record<number, DayMeta> = {};
+  payouts.forEach((payout) => {
+    const date = parsePayoutDate(payout.arrivalDate ?? payout.createdAt);
+    if (!date || date.getFullYear() !== year || date.getMonth() !== monthIndex) return;
+    events[date.getDate()] = {
+      kind: payoutStatusKind(payout.status),
+      amount: formatPayoutMoney(payout.amount, payout.currency?.toUpperCase() ?? "EUR"),
+    };
+  });
+  return events;
+}
+
+function payoutToTransferRow(payout: Payout, bankLast4?: string) {
+  const arrival = payout.arrivalDate ?? payout.createdAt;
+  return {
+    id: payout.id ? `#${payout.id.slice(-8).toUpperCase()}` : "—",
+    accredito: formatPayoutDateLong(arrival),
+    periodo: payout.status === "paid" ? "Bonifico completato" : "Bonifico programmato",
+    lordo: formatPayoutMoney(payout.amount, payout.currency?.toUpperCase() ?? "EUR"),
+    commissioni: "—",
+    commissioniPct: "—",
+    netto: formatPayoutMoney(payout.amount, payout.currency?.toUpperCase() ?? "EUR"),
+    conto: bankLast4 ?? "—",
+  };
+}
+
 export default function StoricoPagamentiPage() {
-  const [view, setView] = useState(() => ({ y: 2024, m: 11 }));
+  const now = new Date();
+  const [view, setView] = useState(() => ({ y: now.getFullYear(), m: now.getMonth() }));
   const [helpOpen, setHelpOpen] = useState(false);
   const helpRef = useRef<HTMLDivElement | null>(null);
   const [search, setSearch] = useState("");
   const [historyPage, setHistoryPage] = useState(1);
+  const [loading, setLoading] = useState(true);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [payouts, setPayouts] = useState<Payout[]>([]);
+  const [bankLast4, setBankLast4] = useState<string | undefined>();
   const perPage = 8;
 
-  const transfers = useMemo(() => {
-    const detailed = [
-      {
-        id: "#3R-PAY-12084",
-        accredito: "8 Dic 2024, Domenica, 09:15",
-        periodo: "1-7 Dic 2024, 7 giorni",
-        lordo: "€13,200.00",
-        commissioni: "-€769.80",
-        commissioniPct: "5.83%",
-        netto: "€12,430.20",
-        conto: "3456",
-      },
-      {
-        id: "#3R-PAY-12071",
-        accredito: "1 Dic 2024, Domenica, 08:42",
-        periodo: "24-30 Nov 2024, 7 giorni",
-        lordo: "€9,240.00",
-        commissioni: "-€538.90",
-        commissioniPct: "5.83%",
-        netto: "€8,701.10",
-        conto: "3456",
-      },
-      {
-        id: "#3R-PAY-12058",
-        accredito: "24 Nov 2024, Domenica, 09:05",
-        periodo: "17-23 Nov 2024, 7 giorni",
-        lordo: "€11,050.00",
-        commissioni: "-€644.20",
-        commissioniPct: "5.83%",
-        netto: "€10,405.80",
-        conto: "3456",
-      },
-      {
-        id: "#3R-PAY-12041",
-        accredito: "17 Nov 2024, Domenica, 08:58",
-        periodo: "10-16 Nov 2024, 7 giorni",
-        lordo: "€8,900.00",
-        commissioni: "-€518.90",
-        commissioniPct: "5.83%",
-        netto: "€8,381.10",
-        conto: "3456",
-      },
-      {
-        id: "#3R-PAY-12029",
-        accredito: "10 Nov 2024, Domenica, 09:22",
-        periodo: "3-9 Nov 2024, 7 giorni",
-        lordo: "€10,400.00",
-        commissioni: "-€606.30",
-        commissioniPct: "5.83%",
-        netto: "€9,793.70",
-        conto: "3456",
-      },
-      {
-        id: "#3R-PAY-12012",
-        accredito: "3 Nov 2024, Domenica, 08:51",
-        periodo: "27 Ott-2 Nov 2024, 7 giorni",
-        lordo: "€7,650.00",
-        commissioni: "-€446.00",
-        commissioniPct: "5.83%",
-        netto: "€7,204.00",
-        conto: "3456",
-      },
-      {
-        id: "#3R-PAY-11998",
-        accredito: "27 Ott 2024, Domenica, 09:10",
-        periodo: "20-26 Ott 2024, 7 giorni",
-        lordo: "€12,100.00",
-        commissioni: "-€706.40",
-        commissioniPct: "5.83%",
-        netto: "€11,393.60",
-        conto: "3456",
-      },
-      {
-        id: "#3R-PAY-11985",
-        accredito: "20 Ott 2024, Domenica, 08:47",
-        periodo: "13-19 Ott 2024, 7 giorni",
-        lordo: "€9,800.00",
-        commissioni: "-€571.30",
-        commissioniPct: "5.83%",
-        netto: "€9,228.70",
-        conto: "3456",
-      },
-    ];
-    const rest = Array.from({ length: 52 - detailed.length }, (_, i) => {
-      const n = 11984 - i;
-      const gross = 5000 + (i % 7) * 850;
-      const fee = Math.round(gross * 0.0583 * 100) / 100;
-      const net = gross - fee;
-      const day = Math.max(1, 25 - (i % 24));
-      return {
-        id: `#3R-PAY-${n}`,
-        accredito: `${day} Set 2024, Venerdì, 09:00`,
-        periodo: "Settimana precedente, 7 giorni",
-        lordo: `€${gross.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-        commissioni: `-€${fee.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-        commissioniPct: "5.83%",
-        netto: `€${net.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-        conto: "3456",
-      };
-    });
-    return [...detailed, ...rest];
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      setStatusMessage(null);
+      try {
+        const [payoutsPayload, banksPayload] = await Promise.all([
+          businessPaymentsApi.getPayouts(),
+          businessPaymentsApi.getBankAccounts(),
+        ]);
+        if (cancelled) return;
+        setPayouts(Array.isArray(payoutsPayload) ? payoutsPayload : []);
+        const defaultBank = (Array.isArray(banksPayload) ? banksPayload : []).find((b) => b.isDefault)
+          ?? (Array.isArray(banksPayload) ? banksPayload[0] : undefined);
+        const iban = defaultBank?.iban ?? "";
+        setBankLast4(iban.length >= 4 ? iban.slice(-4) : undefined);
+      } catch (error) {
+        if (!cancelled) setStatusMessage(formatApiErrorMessage(error));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
+  const transfers = useMemo(
+    () =>
+      [...payouts]
+        .sort((a, b) => {
+          const aTime = parsePayoutDate(a.arrivalDate ?? a.createdAt)?.getTime() ?? 0;
+          const bTime = parsePayoutDate(b.arrivalDate ?? b.createdAt)?.getTime() ?? 0;
+          return bTime - aTime;
+        })
+        .map((payout) => payoutToTransferRow(payout, bankLast4)),
+    [payouts, bankLast4]
+  );
+
+  const kpi = useMemo(() => {
+    const year = now.getFullYear();
+    const yearPayouts = payouts.filter((p) => {
+      const date = parsePayoutDate(p.arrivalDate ?? p.createdAt);
+      return date?.getFullYear() === year && p.status === "paid";
+    });
+    const yearTotal = yearPayouts.reduce((sum, p) => sum + (p.amount ?? 0), 0);
+    const latest = transfers[0];
+    const avg = yearPayouts.length ? yearTotal / yearPayouts.length : 0;
+    return {
+      yearTotal: formatPayoutMoney(yearTotal),
+      latestNet: latest?.netto ?? "—",
+      yearCount: String(yearPayouts.length),
+      avg: formatPayoutMoney(avg),
+    };
+  }, [payouts, transfers, now]);
 
   const filteredTransfers = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -298,20 +276,15 @@ export default function StoricoPagamentiPage() {
   }, []);
 
   const cells = useMemo(() => padMondayStartCells(view.y, view.m), [view.y, view.m]);
-  const key = monthKey(view.y, view.m);
-  const eventsForMonth = DEMO_EVENTS[key] ?? {};
+  const eventsForMonth = useMemo(
+    () => buildMonthEvents(payouts, view.y, view.m),
+    [payouts, view.y, view.m]
+  );
 
-  const realToday = new Date();
-  const isToday = (d: Date) => {
-    if (view.y === 2024 && view.m === 11) {
-      return d.getDate() === 13 && d.getMonth() === 11 && d.getFullYear() === 2024;
-    }
-    return (
-      d.getDate() === realToday.getDate() &&
-      d.getMonth() === realToday.getMonth() &&
-      d.getFullYear() === realToday.getFullYear()
-    );
-  };
+  const isToday = (d: Date) =>
+    d.getDate() === now.getDate() &&
+    d.getMonth() === now.getMonth() &&
+    d.getFullYear() === now.getFullYear();
 
   function prevMonth() {
     setView((v) => {
@@ -351,11 +324,16 @@ export default function StoricoPagamentiPage() {
           />
 
           <div className="mx-auto w-full max-w-6xl px-4 py-7 lg:px-8">
+            {statusMessage ? (
+              <p className="mb-4 rounded-xl bg-red-50 px-4 py-3 text-[12px] font-semibold text-red-700">
+                {statusMessage}
+              </p>
+            ) : null}
             <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <KpiCard label="Totale ricevuto annuale" value="€487,650.00" variant="filled" />
-              <KpiCard label="Ultima bonifica ricevuta" value="€12,430.20" />
-              <KpiCard label="Bonifici ricevuti annuale" value="52" />
-              <KpiCard label="Importo medio bonifica" value="€9,378.00" />
+              <KpiCard label="Totale ricevuto annuale" value={loading ? "—" : kpi.yearTotal} variant="filled" />
+              <KpiCard label="Ultima bonifica ricevuta" value={loading ? "—" : kpi.latestNet} />
+              <KpiCard label="Bonifici ricevuti annuale" value={loading ? "—" : kpi.yearCount} />
+              <KpiCard label="Importo medio bonifica" value={loading ? "—" : kpi.avg} />
             </section>
 
             <section className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-[2fr_1fr]">

@@ -116,6 +116,8 @@ export default function ScansionaAggiungiPage() {
   const [shipping, setShipping] = useState(true);
   const [catalogVisible, setCatalogVisible] = useState(true);
   const [featured, setFeatured] = useState(false);
+
+  const [barcodeLookupLoading, setBarcodeLookupLoading] = useState(false);
   const [uploadedImages, setUploadedImages] = useState<UploadedImage[]>([]);
   const [isDragActive, setIsDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -268,6 +270,37 @@ export default function ScansionaAggiungiPage() {
     return row?.selectedValue?.trim() ?? "";
   }
 
+  async function handleBarcodeLookup() {
+    const barcode =
+      typeof window !== "undefined"
+        ? window.prompt("Inserisci barcode / EAN", "")?.trim()
+        : "";
+    if (!barcode) return;
+
+    setBarcodeLookupLoading(true);
+    setStatusMessage(null);
+
+    try {
+      const result = await businessArticlesApi.lookupBarcode(barcode);
+      const name =
+        (typeof result.name === "string" && result.name) ||
+        (typeof result.description === "string" && result.description) ||
+        "";
+      if (name) setProductName(name);
+      if (typeof result.shortDescription === "string") setShortDescription(result.shortDescription);
+      if (typeof result.fullDescription === "string") setFullDescription(result.fullDescription);
+
+      setStatusMessage({
+        message: name ? "Dati prodotto caricati dal barcode." : "Barcode trovato.",
+        tone: "success",
+      });
+    } catch (error) {
+      setStatusMessage({ message: formatApiErrorMessage(error), tone: "error" });
+    } finally {
+      setBarcodeLookupLoading(false);
+    }
+  }
+
   async function handlePublish() {
     setPublishing(true);
     setStatusMessage(null);
@@ -362,16 +395,11 @@ export default function ScansionaAggiungiPage() {
               <div className="mt-6 flex justify-center sm:justify-end">
                 <button
                   type="button"
-                  onClick={() =>
-                    setStatusMessage({
-                      message:
-                        "Scanner barcode non ancora disponibile: serve un endpoint backend di lookup.",
-                      tone: "error",
-                    })
-                  }
-                  className="inline-flex h-11 shrink-0 items-center justify-end rounded-lg bg-[#76C043] px-18 py-3 text-sm font-semibold text-[#14311f] hover:cursor-pointer hover:bg-[#6aad3c]"
+                  disabled={barcodeLookupLoading}
+                  onClick={() => void handleBarcodeLookup()}
+                  className="inline-flex h-11 shrink-0 items-center justify-end rounded-lg bg-[#76C043] px-18 py-3 text-sm font-semibold text-[#14311f] hover:cursor-pointer hover:bg-[#6aad3c] disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  Avvia scanner
+                  {barcodeLookupLoading ? "Ricerca..." : "Avvia scanner"}
                 </button>
               </div>
             </div>

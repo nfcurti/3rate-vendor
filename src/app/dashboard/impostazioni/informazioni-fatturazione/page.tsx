@@ -5,11 +5,8 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import clsx from "clsx";
 import { formatApiErrorMessage } from "@/lib/business-auth";
-import {
-  businessInfoApi,
-  ensureBusinessInfoRecord,
-  saveBusinessProfile,
-} from "@/lib/business-info";
+import { businessBillingApi } from "@/lib/business-billing";
+import { businessInfoApi, ensureBusinessInfoRecord } from "@/lib/business-info";
 import { findRegionByProvinceCode } from "@/lib/italian-regions";
 import { DashboardViewHeader } from "../../_components/DashboardViewHeader";
 import { Sidebar } from "../../_components/Sidebar";
@@ -78,34 +75,32 @@ export default function InformazioniFatturazionePage() {
       setStatusMessage(null);
 
       try {
-        let payload;
-        try {
-          payload = await ensureBusinessInfoRecord();
-        } catch {
-          payload = await businessInfoApi.getAccountInfo();
-        }
+        const [billingInfo, accountPayload] = await Promise.all([
+          businessBillingApi.getInfo(),
+          ensureBusinessInfoRecord().catch(() => businessInfoApi.getAccountInfo()),
+        ]);
 
         if (cancelled) return;
 
-        const info = payload.info;
-        const account = payload.account;
-        const province = normalizeLoadedField(info?.province);
+        const info = billingInfo as Record<string, string | undefined>;
+        const account = accountPayload.account;
+        const province = normalizeLoadedField(info.province);
         const region =
-          normalizeLoadedField(info?.region) || findRegionByProvinceCode(province) || "";
+          normalizeLoadedField(info.region) || findRegionByProvinceCode(province) || "";
 
         setForm({
-          ragioneSociale: normalizeLoadedField(info?.ragioneSociale),
-          partitaIVA: normalizeLoadedField(info?.partitaIVA),
-          codiceFiscale: normalizeLoadedField(info?.codiceFiscale),
-          codiceSDI: normalizeLoadedField(info?.codiceSDI),
-          fullAddress: normalizeLoadedField(info?.fullAddress),
-          city: normalizeLoadedField(info?.city),
-          cap: normalizeLoadedField(info?.cap),
+          ragioneSociale: normalizeLoadedField(info.ragioneSociale),
+          partitaIVA: normalizeLoadedField(info.partitaIVA),
+          codiceFiscale: normalizeLoadedField(info.codiceFiscale),
+          codiceSDI: normalizeLoadedField(accountPayload.info?.codiceSDI),
+          fullAddress: normalizeLoadedField(info.fullAddress),
+          city: normalizeLoadedField(info.city),
+          cap: normalizeLoadedField(info.cap),
           province,
           region,
-          email: normalizeLoadedField(info?.email) || account?.email || "",
-          phoneNumber: normalizeLoadedField(info?.phoneNumber),
-          pec: normalizeLoadedField(info?.pec),
+          email: normalizeLoadedField(account?.email),
+          phoneNumber: normalizeLoadedField(accountPayload.info?.phoneNumber),
+          pec: normalizeLoadedField(info.pec),
         });
       } catch (error) {
         if (!cancelled) {
@@ -137,26 +132,16 @@ export default function InformazioniFatturazionePage() {
       const region =
         form.region.trim() || findRegionByProvinceCode(form.province.trim()) || form.region;
 
-      await saveBusinessProfile({
-        business: {
-          ragioneSociale: form.ragioneSociale,
-          partitaIVA: form.partitaIVA,
-          codiceFiscale: form.codiceFiscale,
-          codiceSDI: form.codiceSDI,
-          email: form.email,
-          phoneNumber: form.phoneNumber,
-        },
-        contacts: {
-          pec: form.pec,
-          whatsappNumber: "",
-        },
-        address: {
-          fullAddress: form.fullAddress,
-          cap: form.cap,
-          city: form.city,
-          province: form.province,
-          region,
-        },
+      await businessBillingApi.putInfo({
+        ragioneSociale: form.ragioneSociale,
+        partitaIVA: form.partitaIVA,
+        codiceFiscale: form.codiceFiscale,
+        fullAddress: form.fullAddress,
+        cap: form.cap,
+        city: form.city,
+        province: form.province,
+        region,
+        pec: form.pec,
       });
 
       setStatusMessage({

@@ -1,3 +1,4 @@
+import { buildQuery, type PaginatedResult, unwrapPaginated } from "./api-pagination";
 import { getBusinessAuthToken, payohRequest } from "./business-auth";
 import type { ArticleListing } from "./business-articles";
 
@@ -21,6 +22,41 @@ export type BusinessOrder = {
   paymentOrderId?: string | null;
   createdAt?: string;
   updatedAt?: string;
+};
+
+export type ShippingAddress = {
+  _id?: string;
+  fullAddress?: string;
+  cap?: string;
+  city?: string;
+  province?: string;
+  region?: string;
+};
+
+export type EnrichedOrderClient = {
+  displayName?: string;
+  account?: { email?: string };
+  info?: { name?: string; lastName?: string };
+};
+
+export type EnrichedOrderListItem = {
+  order: BusinessOrder;
+  client?: EnrichedOrderClient | null;
+  shippingAddress?: ShippingAddress | null;
+  shippingStatus?: ShippingStatus | null;
+};
+
+export type EnrichedOrderDetail = EnrichedOrderListItem & {
+  tracking?: Record<string, unknown> | null;
+  paymentOrder?: Record<string, unknown> | null;
+  transactions?: Record<string, unknown>[];
+  articles?: BusinessArticle[];
+};
+
+export type BusinessReturnRecord = {
+  return: Record<string, unknown>;
+  order?: BusinessOrder | null;
+  articles?: BusinessArticle[];
 };
 
 export type ShippingStatus = {
@@ -64,12 +100,45 @@ export const SHIPPING_STATUS_TAB_MAP: Record<
 };
 
 export const businessOrdersApi = {
-  getAll: (token?: string) =>
-    payohRequest<BusinessOrder[]>(
-      "/business/order/get_all",
+  getAll: async (params?: { page?: number; limit?: number }, token?: string) => {
+    const payload = await payohRequest<PaginatedResult<EnrichedOrderListItem>>(
+      `/business/order/get_all${buildQuery({
+        page: params?.page ?? 1,
+        limit: params?.limit ?? 100,
+      })}`,
       undefined,
       token ?? withToken(),
       "GET"
+    );
+    return unwrapPaginated(payload);
+  },
+  getOne: (orderId: string, token?: string) =>
+    payohRequest<EnrichedOrderDetail>(
+      `/business/order/get_one?orderId=${encodeURIComponent(orderId)}`,
+      undefined,
+      token ?? withToken(),
+      "GET"
+    ),
+  getReturns: async (params?: { page?: number; limit?: number }, token?: string) => {
+    const payload = await payohRequest<BusinessReturnRecord[] | PaginatedResult<BusinessReturnRecord>>(
+      `/business/order/get_returns${buildQuery({
+        page: params?.page ?? 1,
+        limit: params?.limit ?? 100,
+      })}`,
+      undefined,
+      token ?? withToken(),
+      "GET"
+    );
+    return unwrapPaginated(payload);
+  },
+  createReturn: (
+    input: { orderId: string; items: Array<Record<string, unknown>>; reason?: string },
+    token?: string
+  ) =>
+    payohRequest<Record<string, unknown>>(
+      "/business/order/create_return",
+      input,
+      token ?? withToken()
     ),
   updateShippingStatus: (
     orderId: string,
@@ -110,25 +179,34 @@ export const businessOrdersApi = {
 };
 
 export async function getShippingStatuses(): Promise<ShippingStatus[]> {
-  const token = getBusinessAuthToken();
-  if (!token) throw new Error("Sessione scaduta. Accedi di nuovo.");
+  return payohRequest<ShippingStatus[]>(
+    "/business/shipping_statuses",
+    undefined,
+    withToken(),
+    "GET"
+  );
+}
 
-  const response = await fetch("/api/business/shipping-statuses", {
-    headers: { Authorization: `Bearer ${token}` },
-    cache: "no-store",
-  });
+export function extractOrdersFromList(items: EnrichedOrderListItem[]): BusinessOrder[] {
+  return items.map((item) => item.order).filter(Boolean);
+}
 
-  const data = (await response.json().catch(() => ({}))) as {
-    result?: boolean;
-    payload?: ShippingStatus[];
-    error?: string;
-  };
+export function getClientDisplayName(
+  client?: EnrichedOrderClient | null,
+  fallback = "Cliente"
+) {
+  if (!client) return fallback;
+  if (client.displayName?.trim()) return client.displayName;
+  if (client.account?.email) return client.account.email;
+  return fallback;
+}
 
-  if (!response.ok || data.error || !data.payload) {
-    throw new Error(data.error || "Impossibile caricare gli stati spedizione.");
-  }
-
-  return data.payload;
+export function formatShippingAddress(address?: ShippingAddress | null) {
+  if (!address) return "—";
+  const line = [address.fullAddress, address.cap, address.city, address.province]
+    .filter(Boolean)
+    .join(", ");
+  return line || "—";
 }
 
 export function getShippingStatusById(

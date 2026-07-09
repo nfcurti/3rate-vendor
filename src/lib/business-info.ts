@@ -24,6 +24,18 @@ export type BusinessInfo = {
   pec?: string;
   phoneNumber?: string;
   whatsappNumber?: string;
+  socialLinks?: {
+    instagram?: string;
+    facebook?: string;
+    tiktok?: string;
+    website?: string;
+  };
+  privacySettings?: {
+    profileVisible?: boolean;
+    showEmail?: boolean;
+    showPhone?: boolean;
+    showGeolocation?: boolean;
+  };
 };
 
 export type BusinessAccountInfoPayload = {
@@ -116,6 +128,20 @@ export type StoreDescriptionPayload = {
 export type UpdateStoreDescriptionInput = {
   storeDescription?: string;
   productCategoryIds?: string[];
+};
+
+export type UpdateSocialLinksInput = {
+  instagram?: string;
+  facebook?: string;
+  tiktok?: string;
+  website?: string;
+};
+
+export type UpdatePrivacySettingsInput = {
+  profileVisible?: boolean;
+  showEmail?: boolean;
+  showPhone?: boolean;
+  showGeolocation?: boolean;
 };
 
 const DEFAULT_COORDINATES = {
@@ -310,6 +336,38 @@ export const businessInfoApi = {
       undefined,
       token ?? withToken(),
       "GET"
+    ),
+  getSocialLinks: (token?: string) =>
+    payohRequest<UpdateSocialLinksInput>(
+      "/business/info/get_social_links",
+      undefined,
+      token ?? withToken(),
+      "GET"
+    ),
+  updateSocialLinks: (input: UpdateSocialLinksInput, token?: string) =>
+    payohRequest<Record<string, unknown>>(
+      "/business/info/update_social_links",
+      input,
+      token ?? withToken()
+    ),
+  updatePrivacySettings: (input: UpdatePrivacySettingsInput, token?: string) =>
+    payohRequest<Record<string, unknown>>(
+      "/business/info/update_privacy_settings",
+      input,
+      token ?? withToken()
+    ),
+  exportData: (token?: string) =>
+    payohRequest<Record<string, unknown>>(
+      "/business/info/export_data",
+      {},
+      token ?? withToken()
+    ),
+  suspendAccount: (token?: string) =>
+    payohRequest<{ suspended: boolean }>(
+      "/business/account/suspend",
+      {},
+      token ?? withToken(),
+      "POST"
     ),
 };
 

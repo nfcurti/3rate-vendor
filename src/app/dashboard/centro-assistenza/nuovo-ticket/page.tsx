@@ -12,6 +12,11 @@ import {
   X,
 } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
+import clsx from "clsx";
+import { formatApiErrorMessage } from "@/lib/business-auth";
+import { businessSupportApi } from "@/lib/business-support";
 import { DashboardViewHeader } from "../../_components/DashboardViewHeader";
 import { Sidebar } from "../../_components/Sidebar";
 import { ViewTransition } from "../../_components/ViewTransition";
@@ -65,6 +70,40 @@ function InputBase({
 }
 
 export default function NuovoTicketPage() {
+  const router = useRouter();
+  const [subject, setSubject] = useState("");
+  const [message, setMessage] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [statusMessage, setStatusMessage] = useState<{
+    message: string;
+    tone: "error" | "success";
+  } | null>(null);
+
+  async function handleSubmit() {
+    if (!subject.trim()) {
+      setStatusMessage({ message: "Inserisci un oggetto per il ticket.", tone: "error" });
+      return;
+    }
+    setSubmitting(true);
+    setStatusMessage(null);
+    try {
+      const ticket = await businessSupportApi.createTicket({
+        subject: subject.trim(),
+        message: message.trim() || undefined,
+      });
+      const ticketId = ticket._id;
+      router.push(
+        ticketId
+          ? `/dashboard/centro-assistenza/ticket/${ticketId}`
+          : "/dashboard/centro-assistenza/tickets"
+      );
+    } catch (error) {
+      setStatusMessage({ message: formatApiErrorMessage(error), tone: "error" });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   return (
     <div className="min-h-screen bg-[#f3f5f2] text-[#1f2b20]">
       <div className="grid min-h-screen grid-cols-1 lg:grid-cols-[260px_1fr]">
@@ -137,7 +176,11 @@ export default function NuovoTicketPage() {
                   <FieldLabel>
                     Oggetto <span className="text-[#e11d48]">*</span>
                   </FieldLabel>
-                  <InputBase placeholder="Es: Bonifico non ricevuto per ordine #2345" />
+                  <InputBase
+                    value={subject}
+                    onChange={(e) => setSubject(e.target.value)}
+                    placeholder="Es: Bonifico non ricevuto per ordine #2345"
+                  />
                   <p className="mt-1 text-[9px] text-[#6B7280]">Sii specifico e conciso</p>
                 </div>
 
@@ -146,6 +189,8 @@ export default function NuovoTicketPage() {
                     Descrizione Dettagliata <span className="text-[#e11d48]">*</span>
                   </FieldLabel>
                   <textarea
+                    value={message}
+                    onChange={(e) => setMessage(e.target.value)}
                     className="h-36 w-full resize-none rounded-lg border border-[#e3e6ea] bg-[#f5f6f8] px-3 py-2.5 text-[12px] text-[#1f2b20] outline-none placeholder:text-[#a0a9b3] focus:border-[#2d4f36]/30 focus:ring-1 focus:ring-[#2d4f36]/20"
                     placeholder={
                       "Descrivi il problema in dettaglio, includi:\n- Cosa stavi facendo quando è successo il problema\n- Messaggi di errore ricevuti\n- Steps per replicare il problema\n- Screenshot o allegati se disponibili"
@@ -153,7 +198,7 @@ export default function NuovoTicketPage() {
                   />
                   <div className="mt-1 flex items-center justify-between text-[9px] text-[#6B7280]">
                     <span>Più dettagli fornisci, più velocemente possiamo aiutarti</span>
-                    <span>0 / 2000 caratteri</span>
+                    <span>{message.length} / 2000 caratteri</span>
                   </div>
                 </div>
 
@@ -237,12 +282,24 @@ export default function NuovoTicketPage() {
             </section>
 
             <section className="rounded-xl border border-[#e5e7eb] bg-white p-4">
+              {statusMessage ? (
+                <p
+                  className={clsx(
+                    "mb-3 text-xs font-semibold",
+                    statusMessage.tone === "success" ? "text-[#2f6b3c]" : "text-red-600"
+                  )}
+                >
+                  {statusMessage.message}
+                </p>
+              ) : null}
               <div className="flex justify-end">
                 <button
                   type="button"
-                  className="inline-flex h-9 items-center rounded-lg bg-[#214e3a] px-4 text-[12px] font-semibold text-white hover:cursor-pointer hover:bg-[#1a3f2e]"
+                  disabled={submitting}
+                  onClick={() => void handleSubmit()}
+                  className="inline-flex h-9 items-center rounded-lg bg-[#214e3a] px-4 text-[12px] font-semibold text-white hover:cursor-pointer hover:bg-[#1a3f2e] disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  Invia ticket
+                  {submitting ? "Invio..." : "Invia ticket"}
                 </button>
               </div>
               <hr className="my-3 border-t border-[#e5e7eb]" />

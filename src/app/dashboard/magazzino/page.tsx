@@ -13,6 +13,7 @@ import {
   formatEuro,
   getShippingOptions,
   getVariationCounts,
+  type ArticleAnalyticsEntry,
   type ArticleListing,
   type ArticleReview,
 } from "@/lib/business-articles";
@@ -34,6 +35,9 @@ export default function MagazzinoPage() {
   const [articles, setArticles] = useState<ArticleListing[]>([]);
   const [categories, setCategories] = useState<ProductCategory[]>([]);
   const [reviews, setReviews] = useState<ArticleReview[]>([]);
+  const [analyticsByArticleId, setAnalyticsByArticleId] = useState<
+    Record<string, ArticleAnalyticsEntry>
+  >({});
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{
@@ -51,15 +55,20 @@ export default function MagazzinoPage() {
     setStatusMessage(null);
 
     try {
-      const [listings, categoriesPayload, reviewsPayload] = await Promise.all([
+      const [listings, categoriesPayload, reviewsPayload, analyticsPayload] = await Promise.all([
         businessArticlesApi.getListings(),
         businessArticlesApi.getCategories(),
         businessArticlesApi.seeReviews(),
+        businessArticlesApi.getAnalytics(),
       ]);
 
       setArticles(listings);
       setCategories(categoriesPayload);
       setReviews(reviewsPayload);
+      setAnalyticsByArticleId(
+        (analyticsPayload as { byArticleId?: Record<string, ArticleAnalyticsEntry> }).byArticleId ??
+          {}
+      );
       setSelectedRows([]);
     } catch (error) {
       setStatusMessage({
@@ -114,8 +123,11 @@ export default function MagazzinoPage() {
   const variationCounts = useMemo(() => getVariationCounts(articles), [articles]);
 
   const tableRows = useMemo(
-    () => filteredArticles.map((article) => articleToProductRow(article, variationCounts)),
-    [filteredArticles, variationCounts]
+    () =>
+      filteredArticles.map((article) =>
+        articleToProductRow(article, variationCounts, analyticsByArticleId)
+      ),
+    [filteredArticles, variationCounts, analyticsByArticleId]
   );
 
   const articlesById = useMemo(() => {
