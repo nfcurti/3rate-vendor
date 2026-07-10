@@ -1,8 +1,8 @@
 "use client";
 
-import { Loader2, Package, Save, WandSparkles } from "lucide-react";
+import { ImagePlus, Loader2, Package, Save, Trash2, Upload, WandSparkles } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import clsx from "clsx";
 import { formatApiErrorMessage } from "@/lib/business-auth";
 import {
@@ -15,6 +15,11 @@ import type { ProductCategory } from "@/lib/business-info";
 import { uploadBusinessImage } from "@/lib/business-info";
 import { DashboardViewHeader } from "../../_components/DashboardViewHeader";
 import { FormDropdown } from "../../_components/FormDropdown";
+import {
+  FormDropdownWithOther,
+  getPresetOrCustomValue,
+  resolvePresetSelection,
+} from "../../_components/FormDropdownWithOther";
 import { Sidebar } from "../../_components/Sidebar";
 import { ViewTransition } from "../../_components/ViewTransition";
 
@@ -25,11 +30,30 @@ function parseIds(params: URLSearchParams) {
   return single ? [single] : [];
 }
 
+const SIZE_PRESETS = ["XXS", "XS", "S", "M", "L", "XL", "XXL", "3XL", "Unica"] as const;
+const COLOR_PRESETS = [
+  "Nero",
+  "Bianco",
+  "Argento",
+  "Blu",
+  "Rosso",
+  "Verde",
+  "Beige",
+  "Grigio",
+  "Marrone",
+  "Rosa",
+  "Multicolore",
+] as const;
+
 function parseNumber(value: string) {
   const normalized = value.replace(",", ".").trim();
   if (!normalized) return undefined;
   const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function sanitizeIntegerInput(value: string) {
+  return value.replace(/\D/g, "");
 }
 
 function GestioneMagazzinoContent() {
@@ -76,10 +100,15 @@ function GestioneMagazzinoContent() {
   const [restockAmount, setRestockAmount] = useState("");
   const [categoryId, setCategoryId] = useState("");
   const [shippingOptionId, setShippingOptionId] = useState("");
-  const [size, setSize] = useState("");
-  const [colors, setColors] = useState("");
+  const [sizeSelection, setSizeSelection] = useState("");
+  const [sizeCustom, setSizeCustom] = useState("");
+  const [colorSelection, setColorSelection] = useState("");
+  const [colorCustom, setColorCustom] = useState("");
   const [imageUrl, setImageUrl] = useState("");
+  const [imageName, setImageName] = useState("");
   const [uploadingImage, setUploadingImage] = useState(false);
+  const [isDragActive, setIsDragActive] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -112,9 +141,15 @@ function GestioneMagazzinoContent() {
             setTotalStock(String(found.totalStock));
             setCategoryId(found.categoryIds[0] ?? "");
             setShippingOptionId(found.shippingOptionIds[0] ?? "");
-            setSize(found.size ?? "");
-            setColors(found.colors.join(", "));
+            const sizePreset = resolvePresetSelection([...SIZE_PRESETS], found.size ?? "");
+            setSizeSelection(sizePreset.selection);
+            setSizeCustom(sizePreset.custom);
+            const colorValue = found.colors.join(", ");
+            const colorPreset = resolvePresetSelection([...COLOR_PRESETS], colorValue);
+            setColorSelection(colorPreset.selection);
+            setColorCustom(colorPreset.custom);
             setImageUrl(found.imagesUrls[0] ?? "");
+            setImageName(found.imagesUrls[0] ? "Immagine prodotto" : "");
           } else {
             setStatusMessage({ message: "Prodotto non trovato.", tone: "error" });
           }
@@ -165,17 +200,44 @@ function GestioneMagazzinoContent() {
 
   async function handleImageUpload(file: File | null) {
     if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      setStatusMessage({ message: "Carica un file immagine valido.", tone: "error" });
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setStatusMessage({ message: "L'immagine deve essere inferiore a 10 MB.", tone: "error" });
+      return;
+    }
+
     setUploadingImage(true);
     setStatusMessage(null);
     try {
       const url = await uploadBusinessImage(file);
       setImageUrl(url);
+      setImageName(file.name);
     } catch (error) {
       setStatusMessage({ message: formatApiErrorMessage(error), tone: "error" });
     } finally {
       setUploadingImage(false);
     }
   }
+
+  function handleImageFiles(fileList: FileList | File[]) {
+    const file = Array.from(fileList)[0];
+    if (file) void handleImageUpload(file);
+  }
+
+  function openFilePicker() {
+    fileInputRef.current?.click();
+  }
+
+  function clearImage() {
+    setImageUrl("");
+    setImageName("");
+  }
+
+  const resolvedSize = getPresetOrCustomValue(sizeSelection, sizeCustom);
+  const resolvedColor = getPresetOrCustomValue(colorSelection, colorCustom);
 
   async function handleSubmit() {
     setSaving(true);
@@ -201,11 +263,13 @@ function GestioneMagazzinoContent() {
           shippingOptionIds: [shippingOptionId],
           discountedPrice: parseNumber(discountedPrice),
           imagesUrls: imageUrl ? [imageUrl] : [],
-          colors: colors
-            .split(",")
-            .map((value) => value.trim())
-            .filter(Boolean),
-          size: size.trim(),
+          colors: resolvedColor
+            ? resolvedColor
+                .split(",")
+                .map((value) => value.trim())
+                .filter(Boolean)
+            : [],
+          size: resolvedSize,
         });
 
         setStatusMessage({ message: "Prodotto creato con successo.", tone: "success" });
@@ -248,12 +312,14 @@ function GestioneMagazzinoContent() {
         }
         if (categoryId) updates.categoryIds = [categoryId];
         if (shippingOptionId) updates.shippingOptionIds = [shippingOptionId];
-        if (size.trim()) updates.size = size.trim();
-        if (colors.trim()) {
-          updates.colors = colors
-            .split(",")
-            .map((value) => value.trim())
-            .filter(Boolean);
+        if (sizeSelection) updates.size = resolvedSize;
+        if (colorSelection) {
+          updates.colors = resolvedColor
+            ? resolvedColor
+                .split(",")
+                .map((value) => value.trim())
+                .filter(Boolean)
+            : [];
         }
 
         if (Object.keys(updates).length === 0) {
@@ -289,11 +355,13 @@ function GestioneMagazzinoContent() {
         categoryIds: categoryId ? [categoryId] : undefined,
         shippingOptionIds: shippingOptionId ? [shippingOptionId] : undefined,
         imagesUrls: imageUrl ? [imageUrl] : [],
-        colors: colors
-          .split(",")
-          .map((value) => value.trim())
-          .filter(Boolean),
-        size: size.trim(),
+        colors: resolvedColor
+          ? resolvedColor
+              .split(",")
+              .map((value) => value.trim())
+              .filter(Boolean)
+          : [],
+        size: resolvedSize,
       });
 
       setStatusMessage({ message: "Prodotto aggiornato.", tone: "success" });
@@ -445,8 +513,10 @@ function GestioneMagazzinoContent() {
                             </label>
                             <input
                               type="text"
+                              inputMode="numeric"
+                              pattern="[0-9]*"
                               value={totalStock}
-                              onChange={(e) => setTotalStock(e.target.value)}
+                              onChange={(e) => setTotalStock(sanitizeIntegerInput(e.target.value))}
                               placeholder={
                                 isBatch ? "Lascia vuoto per non modificare" : "20"
                               }
@@ -458,12 +528,15 @@ function GestioneMagazzinoContent() {
                             <label className="mb-1.5 block text-[12px] font-semibold text-[#1f2b20]">
                               Taglia
                             </label>
-                            <input
-                              type="text"
-                              value={size}
-                              onChange={(e) => setSize(e.target.value)}
-                              placeholder="Es: M, L, XL"
-                              className="h-10 w-full rounded-xl border border-black/10 bg-[#F9FAFB] px-3 text-[12px] outline-none placeholder:text-[#9aa39a] focus:border-[#214e3a]/35 focus:ring-1 focus:ring-[#214e3a]/20"
+                            <FormDropdownWithOther
+                              options={[...SIZE_PRESETS]}
+                              value={sizeSelection}
+                              customValue={sizeCustom}
+                              onValueChange={setSizeSelection}
+                              onCustomValueChange={setSizeCustom}
+                              placeholder="Seleziona taglia"
+                              aria-label="Taglia prodotto"
+                              customPlaceholder="Es: 42, 38 IT"
                             />
                           </div>
 
@@ -471,12 +544,15 @@ function GestioneMagazzinoContent() {
                             <label className="mb-1.5 block text-[12px] font-semibold text-[#1f2b20]">
                               Colori
                             </label>
-                            <input
-                              type="text"
-                              value={colors}
-                              onChange={(e) => setColors(e.target.value)}
-                              placeholder="Es: Nero, Bianco"
-                              className="h-10 w-full rounded-xl border border-black/10 bg-[#F9FAFB] px-3 text-[12px] outline-none placeholder:text-[#9aa39a] focus:border-[#214e3a]/35 focus:ring-1 focus:ring-[#214e3a]/20"
+                            <FormDropdownWithOther
+                              options={[...COLOR_PRESETS]}
+                              value={colorSelection}
+                              customValue={colorCustom}
+                              onValueChange={setColorSelection}
+                              onCustomValueChange={setColorCustom}
+                              placeholder="Seleziona colore"
+                              aria-label="Colore prodotto"
+                              customPlaceholder="Es: Bordeaux, Verde oliva"
                             />
                           </div>
 
@@ -484,23 +560,104 @@ function GestioneMagazzinoContent() {
                             <label className="mb-1.5 block text-[12px] font-semibold text-[#1f2b20]">
                               Immagine prodotto
                             </label>
-                            <div className="flex flex-wrap items-center gap-3">
-                              <input
-                                type="file"
-                                accept="image/*"
-                                disabled={uploadingImage}
-                                onChange={(e) => void handleImageUpload(e.target.files?.[0] ?? null)}
-                                className="text-[12px] file:mr-3 file:rounded-lg file:border-0 file:bg-[#214e3a] file:px-3 file:py-2 file:text-[11px] file:font-semibold file:text-white hover:file:cursor-pointer"
-                              />
-                              {imageUrl ? (
-                                // eslint-disable-next-line @next/next/no-img-element
-                                <img
-                                  src={imageUrl}
-                                  alt=""
-                                  className="h-12 w-12 rounded-xl object-cover ring-1 ring-black/10"
-                                />
-                              ) : null}
-                            </div>
+                            <input
+                              ref={fileInputRef}
+                              type="file"
+                              accept="image/png,image/jpeg,image/webp,image/jpg"
+                              className="hidden"
+                              disabled={uploadingImage}
+                              onChange={(e) => {
+                                if (e.target.files) handleImageFiles(e.target.files);
+                                e.currentTarget.value = "";
+                              }}
+                            />
+                            {imageUrl ? (
+                              <div className="overflow-hidden rounded-2xl border border-black/10 bg-[#fafafa]">
+                                <div className="relative aspect-[4/3] max-h-56 w-full bg-[#f3f4f6] sm:max-w-sm">
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  <img
+                                    src={imageUrl}
+                                    alt={imageName || "Anteprima prodotto"}
+                                    className="h-full w-full object-cover"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={clearImage}
+                                    disabled={uploadingImage}
+                                    className="absolute right-2 top-2 inline-flex h-8 w-8 items-center justify-center rounded-lg bg-black/60 text-white hover:cursor-pointer hover:bg-black/75 disabled:cursor-not-allowed disabled:opacity-60"
+                                    aria-label="Rimuovi immagine"
+                                  >
+                                    <Trash2 className="h-4 w-4" />
+                                  </button>
+                                </div>
+                                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-black/5 px-4 py-3">
+                                  <div className="min-w-0">
+                                    <p className="truncate text-[12px] font-semibold text-[#111827]">
+                                      {imageName || "Immagine caricata"}
+                                    </p>
+                                    <p className="text-[11px] text-[#6b7280]">
+                                      PNG, JPG o WEBP fino a 10 MB
+                                    </p>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={openFilePicker}
+                                    disabled={uploadingImage}
+                                    className="inline-flex h-9 items-center justify-center rounded-lg border border-black/10 bg-white px-4 text-[11px] font-semibold text-[#214e3a] hover:cursor-pointer hover:bg-[#f8faf8] disabled:cursor-not-allowed disabled:opacity-60"
+                                  >
+                                    Sostituisci
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div
+                                className={clsx(
+                                  "rounded-2xl border-2 border-dashed bg-[#fafafa] px-4 py-8 text-center transition-colors",
+                                  isDragActive
+                                    ? "border-[#214e3a]/45 bg-[#f1f6f3]"
+                                    : "border-black/15",
+                                  uploadingImage && "pointer-events-none opacity-70"
+                                )}
+                                onDragOver={(e) => {
+                                  e.preventDefault();
+                                  setIsDragActive(true);
+                                }}
+                                onDragLeave={(e) => {
+                                  e.preventDefault();
+                                  setIsDragActive(false);
+                                }}
+                                onDrop={(e) => {
+                                  e.preventDefault();
+                                  setIsDragActive(false);
+                                  if (e.dataTransfer.files?.length) {
+                                    handleImageFiles(e.dataTransfer.files);
+                                  }
+                                }}
+                              >
+                                {uploadingImage ? (
+                                  <Loader2 className="mx-auto h-8 w-8 animate-spin text-[#214e3a]" />
+                                ) : (
+                                  <Upload className="mx-auto h-8 w-8 text-[#9aa39a]" strokeWidth={1.5} />
+                                )}
+                                <p className="mt-2 text-[12px] font-medium text-[#1f2b20]">
+                                  {uploadingImage
+                                    ? "Caricamento immagine..."
+                                    : "Trascina l'immagine qui"}
+                                </p>
+                                <p className="mt-1 text-[11px] text-[#9aa39a]">
+                                  PNG, JPG o WEBP fino a 10 MB
+                                </p>
+                                <button
+                                  type="button"
+                                  onClick={openFilePicker}
+                                  disabled={uploadingImage}
+                                  className="mt-4 inline-flex h-9 items-center gap-2 rounded-lg border border-black/10 bg-[#214e3a] px-4 text-[11px] font-semibold text-white hover:cursor-pointer hover:bg-[#1a3f2e] disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                  <ImagePlus className="h-4 w-4" />
+                                  Sfoglia file
+                                </button>
+                              </div>
+                            )}
                           </div>
                         </>
                       ) : (
@@ -520,8 +677,12 @@ function GestioneMagazzinoContent() {
                             </label>
                             <input
                               type="text"
+                              inputMode="numeric"
+                              pattern="[0-9]*"
                               value={restockAmount}
-                              onChange={(e) => setRestockAmount(e.target.value)}
+                              onChange={(e) =>
+                                setRestockAmount(sanitizeIntegerInput(e.target.value))
+                              }
                               placeholder="Es: 20"
                               className="h-10 w-full rounded-xl border border-black/10 bg-[#F9FAFB] px-3 text-[12px] outline-none placeholder:text-[#9aa39a] focus:border-[#214e3a]/35 focus:ring-1 focus:ring-[#214e3a]/20"
                             />

@@ -1,23 +1,21 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import {
-  ArrowLeft,
-  Bell,
-  ChevronDown,
-  ChevronRight,
-  Clock,
-  Mail,
-  MessageCircle,
-  Phone,
-  Play,
-  Search,
-} from "lucide-react";
+import { ChevronDown, ChevronRight, Loader2, Mail, MessageCircle, Phone, Play, Search } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import clsx from "clsx";
-import { DashboardHelpMenu } from "../_components/DashboardHelpMenu";
+import { formatApiErrorMessage } from "@/lib/business-auth";
+import {
+  businessSupportApi,
+  formatSupportTicketCode,
+  formatSupportTicketStatus,
+  formatSupportTicketUpdated,
+  getSupportTicketId,
+  type SupportTicket,
+} from "@/lib/business-support";
+import { statusAlertClass } from "@/lib/api-fallback";
 import { DashboardViewHeader } from "../_components/DashboardViewHeader";
 import { Sidebar } from "../_components/Sidebar";
 import { ViewTransition } from "../_components/ViewTransition";
@@ -90,6 +88,35 @@ export default function CentroAssistenzaPage() {
   const router = useRouter();
   const [faqOpen, setFaqOpen] = useState<number | null>(0);
   const [kbQuery, setKbQuery] = useState("");
+  const [ticketsLoading, setTicketsLoading] = useState(true);
+  const [ticketsError, setTicketsError] = useState<string | null>(null);
+  const [recentTickets, setRecentTickets] = useState<SupportTicket[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadTickets() {
+      setTicketsLoading(true);
+      setTicketsError(null);
+      try {
+        const payload = await businessSupportApi.listTickets();
+        if (cancelled) return;
+        setRecentTickets(Array.isArray(payload) ? payload.slice(0, 2) : []);
+      } catch (error) {
+        if (!cancelled) {
+          setTicketsError(formatApiErrorMessage(error));
+          setRecentTickets([]);
+        }
+      } finally {
+        if (!cancelled) setTicketsLoading(false);
+      }
+    }
+
+    void loadTickets();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <div className="min-h-screen bg-[#f3f5f2] text-[#1f2b20]">
@@ -180,39 +207,36 @@ export default function CentroAssistenzaPage() {
                     Nuovo ticket
                   </Link>
                 </div>
+                {ticketsError ? (
+                  <p className={clsx("mt-4", statusAlertClass("error"))}>{ticketsError}</p>
+                ) : null}
                 <ul className="mt-5 flex flex-1 flex-col gap-3">
-                  {[
-                    {
-                      id: "#TICK-3892",
-                      slug: "tick-3892",
-                      title: "Problema con bonifico di Dicembre",
-                      snippet:
-                        "Ho ricevuto l’email di chiusura periodo ma sul conto non risulta ancora l’accredito relativo al…",
-                      updated: "Ultima risposta: 2 ore fa",
-                    },
-                    {
-                      id: "#TICK-3341",
-                      slug: "tick-3341",
-                      title: "Modifica IBAN conto principale",
-                      snippet:
-                        "Dovrei aggiornare l’IBAN per i prossimi bonifici. Ho già caricato il documento in allegato…",
-                      updated: "Ultima risposta: ieri, 16:02",
-                    },
-                  ].map((t) => (
-                    <li key={t.id}>
+                  {ticketsLoading ? (
+                    <li className="flex items-center justify-center py-10">
+                      <Loader2 className="h-6 w-6 animate-spin text-[#214e3a]" />
+                    </li>
+                  ) : recentTickets.length ? (
+                    recentTickets.map((ticket, idx) => {
+                      const ticketId = getSupportTicketId(ticket, idx);
+                      return (
+                    <li key={ticketId}>
                       <Link
-                        href={`/dashboard/centro-assistenza/ticket/${t.slug}`}
+                        href={`/dashboard/centro-assistenza/ticket/${ticketId}`}
                         className="block rounded-xl border-2 border-[#e8eaed] p-4 ring-1 ring-black/[0.02] transition-colors hover:cursor-pointer hover:border-[#76C043]"
                       >
                         <div className="text-[10px] font-semibold tracking-wide text-[#9ca3af]">
-                          {t.id}
+                          {formatSupportTicketCode(ticketId)}
                         </div>
-                        <div className="mt-2 text-[14px] font-bold leading-snug text-[#111827]">{t.title}</div>
+                        <div className="mt-2 text-[14px] font-bold leading-snug text-[#111827]">
+                          {ticket.subject || "Ticket di supporto"}
+                        </div>
                         <p className="mt-1.5 line-clamp-2 text-[12px] leading-relaxed text-[#6b7280]">
-                          {t.snippet}
+                          Stato: {formatSupportTicketStatus(ticket.status)}
                         </p>
                         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-[#e8eaed] pt-3">
-                          <span className="text-[11px] font-medium text-[#9ca3af]">{t.updated}</span>
+                          <span className="text-[11px] font-medium text-[#9ca3af]">
+                            {formatSupportTicketUpdated(ticket.updatedAt ?? ticket.createdAt)}
+                          </span>
                           <span className="inline-flex items-center gap-0.5 text-[11px] font-semibold text-[#214e3a]">
                             Visualizza dettagli
                             <ChevronRight className="h-3.5 w-3.5" strokeWidth={2.5} />
@@ -220,7 +244,16 @@ export default function CentroAssistenzaPage() {
                         </div>
                       </Link>
                     </li>
-                  ))}
+                      );
+                    })
+                  ) : (
+                    <li className="rounded-xl border border-dashed border-[#d1d5db] bg-[#fafafa] px-4 py-8 text-center">
+                      <p className="text-[13px] font-semibold text-[#111827]">Nessun ticket aperto</p>
+                      <p className="mt-1 text-[12px] text-[#6b7280]">
+                        Crea un nuovo ticket se hai bisogno di assistenza.
+                      </p>
+                    </li>
+                  )}
                 </ul>
                 <hr className="border-t border-[#E5E7EB]" />
                 <div className="mt-5 rounded-xl bg-[#F9FAFB] hover:bg-[#F3F5F7] hover:cursor-pointer  p-1 text-center">
@@ -407,6 +440,7 @@ export default function CentroAssistenzaPage() {
                   </button>
                   <button
                     type="button"
+                    onClick={() => router.push("/dashboard/centro-assistenza/nuovo-ticket")}
                     className="inline-flex h-11 items-center justify-center rounded-full bg-white px-7 text-[12px] font-semibold text-[#1e4d36] shadow-sm hover:cursor-pointer hover:bg-white/95"
                   >
                     Apri ticket

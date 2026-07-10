@@ -200,10 +200,28 @@ export type ArticleAnalyticsEntry = {
   rank?: number;
 };
 
+export function buildCategoryNameMap(categories: ProductCategory[]) {
+  return Object.fromEntries(
+    categories
+      .filter((category) => category._id)
+      .map((category) => [category._id!, category.name || "Categoria"])
+  );
+}
+
+export function getArticleCategoryLabel(
+  article: Pick<ArticleListing, "categoryIds">,
+  categoryNamesById?: Record<string, string>
+) {
+  const categoryId = article.categoryIds[0];
+  if (!categoryId) return "—";
+  return categoryNamesById?.[categoryId] ?? "Categoria";
+}
+
 export function articleToProductRow(
   article: ArticleListing,
   variationCounts: Map<string, number>,
-  analyticsByArticleId?: Record<string, ArticleAnalyticsEntry>
+  analyticsByArticleId?: Record<string, ArticleAnalyticsEntry>,
+  categoryNamesById?: Record<string, string>
 ): ProductRow {
   const articleId = article._id ?? "";
   const isOutOfStock = article.availableStock <= 0;
@@ -222,7 +240,7 @@ export function articleToProductRow(
     ...status,
     when: ["Creato:", formatArticleDate(article.createdAt)],
     name: article.description,
-    asin: articleId ? articleId.slice(-8).toUpperCase() : "—",
+    category: getArticleCategoryLabel(article, categoryNamesById),
     sku: articleId,
     variants: variantCount > 1 ? `+${variantCount - 1} Varianti` : undefined,
     imageUrl: article.imagesUrls?.[0],

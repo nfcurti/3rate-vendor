@@ -93,8 +93,9 @@ export function FormDropdown({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 6, scale: 0.98 }}
             transition={{ duration: 0.16, ease: "easeOut" }}
-            className="absolute left-0 right-0 z-50 mt-1 overflow-hidden rounded-xl border border-black/10 bg-white py-1 shadow-[0_18px_40px_rgba(16,24,16,0.12)]"
+            className="absolute left-0 right-0 z-50 mt-1 overflow-hidden rounded-xl border border-black/10 bg-white shadow-[0_18px_40px_rgba(16,24,16,0.12)]"
           >
+            <div className="max-h-48 overflow-y-auto overscroll-contain py-1">
             {options.map((o) => {
               const isActive = o.value === value;
               return (
@@ -119,6 +120,7 @@ export function FormDropdown({
                 </button>
               );
             })}
+            </div>
           </motion.div>
         ) : null}
       </AnimatePresence>

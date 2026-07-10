@@ -21,6 +21,7 @@ import { formatApiErrorMessage } from "@/lib/business-auth";
 import { statusAlertClass } from "@/lib/api-fallback";
 import {
   articleToProductRow,
+  buildCategoryNameMap,
   businessArticlesApi,
   getVariationCounts,
 } from "@/lib/business-articles";
@@ -159,6 +160,7 @@ export default function DashboardPage() {
       payoutsResult,
       announcementsResult,
       analyticsResult,
+      categoriesResult,
     ] = await Promise.allSettled([
       businessOrdersApi.getAll({ limit: 100 }),
       getShippingStatuses(),
@@ -168,6 +170,7 @@ export default function DashboardPage() {
       businessPaymentsApi.getPayouts(),
       businessAnnouncementsApi.list(),
       businessArticlesApi.getAnalytics(),
+      businessArticlesApi.getCategories(),
     ]);
 
     const failures = [
@@ -203,6 +206,9 @@ export default function DashboardPage() {
         analyticsResult.status === "fulfilled"
           ? analyticsResult.value
           : { items: [], byArticleId: {} };
+      const categories =
+        categoriesResult.status === "fulfilled" ? categoriesResult.value : [];
+      const categoryNamesById = buildCategoryNameMap(categories);
 
       const orders = extractOrdersFromList(ordersPayload.items);
       setOrderStats(computeOrderDashboardStats(orders, statuses));
@@ -227,7 +233,9 @@ export default function DashboardPage() {
       setProductRows(
         activeArticles
           .slice(0, 4)
-          .map((article) => articleToProductRow(article, variationCounts, analyticsByArticleId))
+          .map((article) =>
+            articleToProductRow(article, variationCounts, analyticsByArticleId, categoryNamesById)
+          )
       );
     } catch (error) {
       setDashboardError(formatApiErrorMessage(error));
@@ -577,7 +585,7 @@ export default function DashboardPage() {
             ) : (
               <ProductsTable
                 rows={productRows}
-                footerHref="/dashboard/magazzino"
+                footerHref="/dashboard/magazzino/catalogo"
                 rowActionHrefBuilder={(row) =>
                   row.action === "Rifornisci"
                     ? `/dashboard/magazzino/gestione?mode=restock&id=${encodeURIComponent(row.sku)}`

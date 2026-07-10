@@ -5,17 +5,21 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import clsx from "clsx";
 import { formatApiErrorMessage } from "@/lib/business-auth";
-import { businessSupportApi, type SupportTicket } from "@/lib/business-support";
+import { statusAlertClass } from "@/lib/api-fallback";
+import {
+  businessSupportApi,
+  formatSupportTicketCode,
+  formatSupportTicketStatus,
+  formatSupportTicketUpdated,
+  getSupportTicketId,
+  type SupportTicket,
+} from "@/lib/business-support";
 import { DashboardViewHeader } from "../../_components/DashboardViewHeader";
 import { Sidebar } from "../../_components/Sidebar";
 import { ViewTransition } from "../../_components/ViewTransition";
 
 function getString(value: unknown, fallback = "") {
   return typeof value === "string" ? value : fallback;
-}
-
-function getTicketId(ticket: SupportTicket, idx: number) {
-  return getString((ticket as any).id) || getString((ticket as any)._id) || `ticket-${idx}`;
 }
 
 const PAGE_SIZE = 5;
@@ -58,9 +62,9 @@ export default function TicketsListPage() {
     const q = query.trim().toLowerCase();
     if (!q) return tickets;
     return tickets.filter((t) => {
-      const id = getString((t as any).id).toLowerCase();
-      const title = getString((t as any).title).toLowerCase();
-      const category = getString((t as any).category).toLowerCase();
+      const id = getSupportTicketId(t).toLowerCase();
+      const title = getString(t.subject).toLowerCase();
+      const category = getString((t as { category?: string }).category).toLowerCase();
       return id.includes(q) || title.includes(q) || category.includes(q);
     });
   }, [query, tickets]);
@@ -84,12 +88,7 @@ export default function TicketsListPage() {
 
             <div className="mx-auto w-full max-w-6xl px-4 py-7 lg:px-8">
               {statusMessage ? (
-                <p
-                  className={clsx(
-                    "mb-4 text-xs font-semibold",
-                    statusMessage.tone === "success" ? "text-[#2f6b3c]" : "text-red-600"
-                  )}
-                >
+                <p className={clsx("mb-4", statusAlertClass(statusMessage.tone))}>
                   {statusMessage.message}
                 </p>
               ) : null}
@@ -131,16 +130,16 @@ export default function TicketsListPage() {
                       </tr>
                     </thead>
                     <tbody className="text-[12px] text-[#1f2b20]">
-                      {pageItems.map((t, idx) => {
-                        const id = getTicketId(t, idx);
-                        const title = getString((t as any).subject, getString((t as any).title, "—"));
-                        const category = getString((t as any).category, "Supporto");
-                        const status = getString((t as any).status, "—");
-                        const updated = getString((t as any).updatedAt, getString((t as any).updated, "—"));
+                      {pageItems.length ? pageItems.map((t, idx) => {
+                        const id = getSupportTicketId(t, idx);
+                        const title = getString(t.subject, "—");
+                        const category = getString((t as { category?: string }).category, "Supporto");
+                        const status = formatSupportTicketStatus(t.status);
+                        const updated = formatSupportTicketUpdated(t.updatedAt ?? t.createdAt);
 
                         return (
                         <tr key={id} className="border-b border-black/5">
-                          <td className="px-4 py-4 font-semibold">#{id}</td>
+                          <td className="px-4 py-4 font-semibold">{formatSupportTicketCode(id)}</td>
                           <td className="py-4 pr-4">{title}</td>
                           <td className="py-4 pr-4">{category}</td>
                           <td className="py-4 pr-4">
@@ -159,7 +158,13 @@ export default function TicketsListPage() {
                           </td>
                         </tr>
                         );
-                      })}
+                      }) : (
+                        <tr>
+                          <td colSpan={6} className="px-4 py-10 text-center text-[12px] text-[#6b7280]">
+                            Nessun ticket trovato.
+                          </td>
+                        </tr>
+                      )}
                     </tbody>
                   </table>
                 </div>

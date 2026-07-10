@@ -1,14 +1,16 @@
 "use client";
 
 import Link from "next/link";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { buildPaginationPageNumbers } from "@/lib/pagination-ui";
 
 export type ProductRow = {
   status: "ATTIVO" | "ESAURITO" | "PAUSA";
   tone: "green" | "red";
   when: [string, string] | [string];
   name: string;
-  asin: string;
+  category: string;
   sku: string;
   imageUrl?: string;
   variants?: string;
@@ -19,11 +21,19 @@ export type ProductRow = {
   action: string;
 };
 
+export type ProductsTablePagination = {
+  page: number;
+  pageSize: number;
+  totalItems: number;
+  onPageChange: (page: number) => void;
+};
+
 export function ProductsTable({
   title = "Articoli in vendita",
   rows,
-  footerHref = "#",
+  footerHref,
   footerLabel = "Visualizza tutto il magazzino",
+  showFooterLink = true,
   selectable = false,
   pagination,
   rowActionHrefBuilder,
@@ -33,34 +43,47 @@ export function ProductsTable({
   rows: ProductRow[];
   footerHref?: string;
   footerLabel?: string;
+  showFooterLink?: boolean;
   selectable?: boolean;
-  pagination?: { totalPages: number; initialPage?: number };
+  pagination?: ProductsTablePagination;
   rowActionHrefBuilder?: (row: ProductRow) => string;
   onSelectionChange?: (rows: ProductRow[]) => void;
 }) {
-  const [page, setPage] = useState(pagination?.initialPage ?? 1);
-  const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(() => new Set());
+  const [selectedSkus, setSelectedSkus] = useState<Set<string>>(() => new Set());
 
-  const rowIds = useMemo(() => rows.map((r, idx) => `${r.sku}-${idx}`), [rows]);
+  const visibleRows = useMemo(() => {
+    if (!pagination) return rows;
+    const start = (pagination.page - 1) * pagination.pageSize;
+    return rows.slice(start, start + pagination.pageSize);
+  }, [pagination, rows]);
+
+  const totalPages = pagination
+    ? Math.max(1, Math.ceil(pagination.totalItems / pagination.pageSize))
+    : 1;
+
+  const pageNumbers = useMemo(
+    () => (pagination ? buildPaginationPageNumbers(totalPages, pagination.page) : []),
+    [pagination, totalPages]
+  );
 
   const allChecked = useMemo(() => {
-    if (!selectable) return false;
-    if (rows.length === 0) return false;
-    return rowIds.every((id) => selectedRowIds.has(id));
-  }, [rows.length, rowIds, selectable, selectedRowIds]);
+    if (!selectable || visibleRows.length === 0) return false;
+    return visibleRows.every((row) => selectedSkus.has(row.sku));
+  }, [selectable, selectedSkus, visibleRows]);
 
   const someChecked = useMemo(() => {
     if (!selectable) return false;
-    return rowIds.some((id) => selectedRowIds.has(id)) && !allChecked;
-  }, [allChecked, rowIds, selectable, selectedRowIds]);
+    return visibleRows.some((row) => selectedSkus.has(row.sku)) && !allChecked;
+  }, [allChecked, selectable, selectedSkus, visibleRows]);
 
   const selectedRows = useMemo(
-    () => rows.filter((row, idx) => selectedRowIds.has(`${row.sku}-${idx}`)),
-    [rows, selectedRowIds],
+    () => rows.filter((row) => selectedSkus.has(row.sku)),
+    [rows, selectedSkus]
   );
+
   const selectedIdsKey = useMemo(
-    () => Array.from(selectedRowIds).sort().join("|"),
-    [selectedRowIds],
+    () => Array.from(selectedSkus).sort().join("|"),
+    [selectedSkus]
   );
   const lastSelectionEmitRef = useRef("");
 
@@ -70,6 +93,26 @@ export function ProductsTable({
     lastSelectionEmitRef.current = selectedIdsKey;
     onSelectionChange(selectedRows);
   }, [onSelectionChange, selectedRows, selectedIdsKey]);
+
+  useEffect(() => {
+    setSelectedSkus((prev) => {
+      const validSkus = new Set(rows.map((row) => row.sku));
+      const next = new Set<string>();
+      prev.forEach((sku) => {
+        if (validSkus.has(sku)) next.add(sku);
+      });
+      return next.size === prev.size ? prev : next;
+    });
+  }, [rows]);
+
+  const showingFrom = pagination
+    ? pagination.totalItems === 0
+      ? 0
+      : (pagination.page - 1) * pagination.pageSize + 1
+    : 0;
+  const showingTo = pagination
+    ? Math.min(pagination.page * pagination.pageSize, pagination.totalItems)
+    : 0;
 
   return (
     <section className="overflow-hidden rounded-3xl bg-white shadow-[0_12px_28px_rgba(16,24,16,0.06)]">
@@ -99,9 +142,15 @@ export function ProductsTable({
                       el.indeterminate = someChecked;
                     }}
                     onChange={(e) => {
-                      const next = new Set<string>();
-                      if (e.target.checked) rowIds.forEach((id) => next.add(id));
-                      setSelectedRowIds(next);
+                      setSelectedSkus((prev) => {
+                        const next = new Set(prev);
+                        if (e.target.checked) {
+                          visibleRows.forEach((row) => next.add(row.sku));
+                        } else {
+                          visibleRows.forEach((row) => next.delete(row.sku));
+                        }
+                        return next;
+                      });
                     }}
                     aria-label="Seleziona tutti"
                   />
@@ -117,21 +166,19 @@ export function ProductsTable({
             </tr>
           </thead>
           <tbody className="text-[12px] text-[#1f2b20]">
-            {rows.map((row, idx) => {
-              const rowId = `${row.sku}-${idx}`;
-              return (
-              <tr key={rowId} className="border-b border-black/5">
+            {visibleRows.map((row) => (
+              <tr key={row.sku} className="border-b border-black/5">
                 {selectable ? (
                   <td className="w-[44px] px-6 py-6 align-top">
                     <input
                       type="checkbox"
                       className="h-4 w-4 rounded border-black/10"
-                      checked={selectedRowIds.has(rowId)}
+                      checked={selectedSkus.has(row.sku)}
                       onChange={(e) => {
-                        setSelectedRowIds((prev) => {
+                        setSelectedSkus((prev) => {
                           const next = new Set(prev);
-                          if (e.target.checked) next.add(rowId);
-                          else next.delete(rowId);
+                          if (e.target.checked) next.add(row.sku);
+                          else next.delete(row.sku);
                           return next;
                         });
                       }}
@@ -169,7 +216,7 @@ export function ProductsTable({
                       </div>
                       <div className="mt-2 text-[10px] font-semibold text-[#9aa39a]">
                         <div>
-                          <span className="text-[#6b746c]">ASIN:</span> {row.asin}
+                          <span className="text-[#6b746c]">Categoria:</span> {row.category}
                         </div>
                         <div>
                           <span className="text-[#6b746c]">SKU:</span> {row.sku}
@@ -257,70 +304,60 @@ export function ProductsTable({
                   )}
                 </td>
               </tr>
-              );
-            })}
+            ))}
           </tbody>
         </table>
       </div>
 
       <div className="px-6 py-6">
         {pagination ? (
-          <div className="flex items-center justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-black/10 bg-white text-[#6b746c] hover:cursor-pointer hover:bg-black/5"
-              aria-label="Pagina precedente"
-            >
-              ‹
-            </button>
-
-            {[1, 2, 3].map((p) => (
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="text-[12px] font-regular text-[#6b746c]">
+              Mostrando {showingFrom}-{showingTo} di {pagination.totalItems} prodotti
+            </div>
+            <div className="flex items-center gap-2">
               <button
-                key={p}
                 type="button"
-                onClick={() => setPage(p)}
-                className={`inline-flex h-9 w-9 items-center justify-center rounded-xl text-[11px] font-semibold hover:cursor-pointer ${
-                  page === p
-                    ? "bg-[#214e3a] text-white"
-                    : "border border-black/10 bg-white text-[#1f2b20] hover:bg-black/5"
-                }`}
+                onClick={() => pagination.onPageChange(Math.max(1, pagination.page - 1))}
+                disabled={pagination.page <= 1}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-[#6b746c] hover:cursor-pointer hover:bg-black/5 disabled:pointer-events-none disabled:opacity-40"
+                aria-label="Pagina precedente"
               >
-                {p}
+                <ChevronLeft className="h-4 w-4" strokeWidth={2.5} />
               </button>
-            ))}
-
-            <div className="px-1 text-[12px] font-semibold text-[#9aa39a]">…</div>
-
-            <button
-              type="button"
-              onClick={() => setPage(pagination.totalPages)}
-              className={`inline-flex h-9 w-9 items-center justify-center rounded-xl text-[11px] font-semibold hover:cursor-pointer ${
-                page === pagination.totalPages
-                  ? "bg-[#214e3a] text-white"
-                  : "border border-black/10 bg-white text-[#1f2b20] hover:bg-black/5"
-              }`}
-            >
-              {pagination.totalPages}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setPage((p) => Math.min(pagination.totalPages, p + 1))}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-black/10 bg-white text-[#6b746c] hover:cursor-pointer hover:bg-black/5"
-              aria-label="Pagina successiva"
-            >
-              ›
-            </button>
+              {pageNumbers.map((pageNumber) => (
+                <button
+                  key={pageNumber}
+                  type="button"
+                  onClick={() => pagination.onPageChange(pageNumber)}
+                  className={`inline-flex h-9 w-9 items-center justify-center rounded-lg text-[11px] font-semibold hover:cursor-pointer ${
+                    pagination.page === pageNumber
+                      ? "bg-[#214e3a] text-white"
+                      : "border border-black/10 bg-white text-[#1f2b20] hover:bg-black/5"
+                  }`}
+                >
+                  {pageNumber}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => pagination.onPageChange(Math.min(totalPages, pagination.page + 1))}
+                disabled={pagination.page >= totalPages}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-[#6b746c] hover:cursor-pointer hover:bg-black/5 disabled:pointer-events-none disabled:opacity-40"
+                aria-label="Pagina successiva"
+              >
+                <ChevronRight className="h-4 w-4" strokeWidth={2.5} />
+              </button>
+            </div>
           </div>
-        ) : (
-          <a
+        ) : footerHref && showFooterLink ? (
+          <Link
             href={footerHref}
             className="flex items-center justify-center gap-2 text-[11px] font-semibold text-[#16A34A] hover:cursor-pointer hover:underline"
           >
             {footerLabel} <span aria-hidden>→</span>
-          </a>
-        )}
+          </Link>
+        ) : null}
       </div>
     </section>
   );
@@ -332,7 +369,7 @@ export const demoProductsRows: ProductRow[] = [
     tone: "green",
     when: ["Dal: 12 Gen 2024", "14:30 PM"],
     name: "Cuffie Wireless Pro - Cancellazione Rumore...",
-    asin: "B0DK7SVN8L",
+    category: "Elettronica",
     sku: "3R-9921-BLK",
     variants: "+3 Varianti",
     perf: [
@@ -359,7 +396,7 @@ export const demoProductsRows: ProductRow[] = [
     tone: "green",
     when: ["Dal: 05 Feb 2024", "09:15 AM"],
     name: "Smart Watch Ultra - GPS, Cellular, Cassa Titanio...",
-    asin: "B0CKB2XYML",
+    category: "Wearables",
     sku: "3R-8402-ORG",
     perf: [
       ["Vendite:", "€22,161.00"],
@@ -385,7 +422,7 @@ export const demoProductsRows: ProductRow[] = [
     tone: "red",
     when: ["Dal: 20 Mar 2024", "11:00 AM"],
     name: "Macchina Caffè Barista Pro - Doppia Caldaia,...",
-    asin: "B09J8K4L2M",
+    category: "Casa e cucina",
     sku: "3R-1120-SS",
     perf: [
       ["Vendite:", "€35,168.00"],
@@ -411,7 +448,7 @@ export const demoProductsRows: ProductRow[] = [
     tone: "green",
     when: ["Dal: 15 Apr 2024", "16:45 PM"],
     name: "Auricolari Air Buds - TWS, Custodia Ricarica...",
-    asin: "B0BL5P7Q3R",
+    category: "Audio",
     sku: "3R-5582-WHT",
     perf: [
       ["Vendite:", "€26,187.00"],

@@ -2,27 +2,18 @@
 
 import { Loader2, Plus, Star, Trash2 } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import clsx from "clsx";
-import { formatApiErrorMessage } from "@/lib/business-auth";
-import {
-  articleToProductRow,
-  businessArticlesApi,
-  computeInventoryStats,
-  formatArticleDate,
-  formatEuro,
-  getShippingOptions,
-  getVariationCounts,
-  type ArticleAnalyticsEntry,
-  type ArticleListing,
-  type ArticleReview,
-} from "@/lib/business-articles";
-import type { ProductCategory } from "@/lib/business-info";
+import { formatArticleDate, formatEuro } from "@/lib/business-articles";
 import { DashboardViewHeader } from "../_components/DashboardViewHeader";
 import { FormDropdown } from "../_components/FormDropdown";
-import { ProductsTable, type ProductRow } from "../_components/ProductsTable";
+import { ProductsTable } from "../_components/ProductsTable";
 import { Sidebar } from "../_components/Sidebar";
 import { ViewTransition } from "../_components/ViewTransition";
+import {
+  MAGAZZINO_PREVIEW_LIMIT,
+  useMagazzinoInventory,
+} from "./useMagazzinoInventory";
 
 function formatInventoryValue(value: number) {
   if (value >= 1000) {
@@ -32,202 +23,36 @@ function formatInventoryValue(value: number) {
 }
 
 export default function MagazzinoPage() {
-  const [articles, setArticles] = useState<ArticleListing[]>([]);
-  const [categories, setCategories] = useState<ProductCategory[]>([]);
-  const [reviews, setReviews] = useState<ArticleReview[]>([]);
-  const [analyticsByArticleId, setAnalyticsByArticleId] = useState<
-    Record<string, ArticleAnalyticsEntry>
-  >({});
-  const [loading, setLoading] = useState(true);
-  const [actionLoading, setActionLoading] = useState(false);
-  const [statusMessage, setStatusMessage] = useState<{
-    message: string;
-    tone: "error" | "success";
-  } | null>(null);
+  const {
+    actionLoading,
+    articlesById,
+    categoryOptions,
+    handleRemoveReview,
+    inventoryCategory,
+    inventoryStatus,
+    inventoryStock,
+    loading,
+    reviews,
+    setInventoryCategory,
+    setInventoryStatus,
+    setInventoryStock,
+    stats,
+    statusMessage,
+    tableRows,
+  } = useMagazzinoInventory();
 
-  const [inventoryCategory, setInventoryCategory] = useState("all");
-  const [inventoryStatus, setInventoryStatus] = useState("all");
-  const [inventoryStock, setInventoryStock] = useState("all");
-  const [selectedRows, setSelectedRows] = useState<ProductRow[]>([]);
-
-  const loadInventory = useCallback(async () => {
-    setLoading(true);
-    setStatusMessage(null);
-
-    try {
-      const [listings, categoriesPayload, reviewsPayload, analyticsPayload] = await Promise.all([
-        businessArticlesApi.getListings(),
-        businessArticlesApi.getCategories(),
-        businessArticlesApi.seeReviews(),
-        businessArticlesApi.getAnalytics(),
-      ]);
-
-      setArticles(listings);
-      setCategories(categoriesPayload);
-      setReviews(reviewsPayload);
-      setAnalyticsByArticleId(
-        (analyticsPayload as { byArticleId?: Record<string, ArticleAnalyticsEntry> }).byArticleId ??
-          {}
-      );
-      setSelectedRows([]);
-    } catch (error) {
-      setStatusMessage({
-        message: formatApiErrorMessage(error),
-        tone: "error",
-      });
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadInventory();
-  }, [loadInventory]);
-
-  const stats = useMemo(() => computeInventoryStats(articles), [articles]);
-
-  const categoryOptions = useMemo(
-    () => [
-      { value: "all", label: "Tutte le categorie" },
-      ...categories.map((category) => ({
-        value: category._id ?? "",
-        label: category.name || "Categoria",
-      })),
-    ],
-    [categories]
+  const previewRows = useMemo(
+    () => tableRows.slice(0, MAGAZZINO_PREVIEW_LIMIT),
+    [tableRows]
   );
 
-  const filteredArticles = useMemo(() => {
-    return articles.filter((article) => {
-      if (
-        inventoryCategory !== "all" &&
-        !article.categoryIds.includes(inventoryCategory)
-      ) {
-        return false;
-      }
-
-      if (inventoryStatus === "attivo" && !article.isActive) return false;
-      if (inventoryStatus === "pausa" && article.isActive) return false;
-      if (inventoryStatus === "esaurito" && article.availableStock > 0) return false;
-
-      if (inventoryStock === "in" && article.availableStock <= 0) return false;
-      if (inventoryStock === "low" && (article.availableStock <= 0 || article.availableStock > 5)) {
-        return false;
-      }
-      if (inventoryStock === "out" && article.availableStock > 0) return false;
-
-      return true;
-    });
-  }, [articles, inventoryCategory, inventoryStatus, inventoryStock]);
-
-  const variationCounts = useMemo(() => getVariationCounts(articles), [articles]);
-
-  const tableRows = useMemo(
-    () =>
-      filteredArticles.map((article) =>
-        articleToProductRow(article, variationCounts, analyticsByArticleId)
-      ),
-    [filteredArticles, variationCounts, analyticsByArticleId]
+  const rowActionHrefBuilder = useMemo(
+    () => (row: { action: string; sku: string }) =>
+      row.action === "Rifornisci"
+        ? `/dashboard/magazzino/gestione?mode=restock&id=${encodeURIComponent(row.sku)}`
+        : `/dashboard/magazzino/gestione?mode=edit&id=${encodeURIComponent(row.sku)}`,
+    []
   );
-
-  const articlesById = useMemo(() => {
-    const map = new Map<string, ArticleListing>();
-    articles.forEach((article) => {
-      if (article._id) map.set(article._id, article);
-    });
-    return map;
-  }, [articles]);
-
-  const selectedArticleIds = useMemo(
-    () => selectedRows.map((row) => row.sku).filter(Boolean),
-    [selectedRows]
-  );
-
-  const batchHref = useMemo(() => {
-    if (selectedArticleIds.length === 0) return "";
-    return `/dashboard/magazzino/gestione?mode=batch&ids=${encodeURIComponent(selectedArticleIds.join(","))}`;
-  }, [selectedArticleIds]);
-
-  async function handleBulkPause() {
-    if (selectedArticleIds.length === 0) return;
-    setActionLoading(true);
-    setStatusMessage(null);
-    try {
-      await Promise.all(
-        selectedArticleIds.map((id) => businessArticlesApi.pauseListing(id))
-      );
-      await loadInventory();
-      setStatusMessage({
-        message: `${selectedArticleIds.length} prodotti messi in pausa.`,
-        tone: "success",
-      });
-    } catch (error) {
-      setStatusMessage({ message: formatApiErrorMessage(error), tone: "error" });
-    } finally {
-      setActionLoading(false);
-    }
-  }
-
-  async function handleBulkRemove() {
-    if (selectedArticleIds.length === 0) return;
-    if (!window.confirm(`Eliminare ${selectedArticleIds.length} prodotti selezionati?`)) return;
-
-    setActionLoading(true);
-    setStatusMessage(null);
-    try {
-      await Promise.all(
-        selectedArticleIds.map((id) => businessArticlesApi.removeListing(id))
-      );
-      await loadInventory();
-      setStatusMessage({
-        message: `${selectedArticleIds.length} prodotti eliminati.`,
-        tone: "success",
-      });
-    } catch (error) {
-      setStatusMessage({ message: formatApiErrorMessage(error), tone: "error" });
-    } finally {
-      setActionLoading(false);
-    }
-  }
-
-  async function handleGroupVariants() {
-    if (selectedArticleIds.length < 2) {
-      setStatusMessage({
-        message: "Seleziona almeno 2 prodotti per raggrupparli come varianti.",
-        tone: "error",
-      });
-      return;
-    }
-
-    setActionLoading(true);
-    setStatusMessage(null);
-    try {
-      await businessArticlesApi.updateConnectedArticles(selectedArticleIds);
-      await loadInventory();
-      setStatusMessage({
-        message: "Varianti raggruppate correttamente.",
-        tone: "success",
-      });
-    } catch (error) {
-      setStatusMessage({ message: formatApiErrorMessage(error), tone: "error" });
-    } finally {
-      setActionLoading(false);
-    }
-  }
-
-  async function handleRemoveReview(reviewId: string) {
-    setActionLoading(true);
-    setStatusMessage(null);
-    try {
-      await businessArticlesApi.removeReview(reviewId);
-      setReviews((prev) => prev.filter((review) => review._id !== reviewId));
-      setStatusMessage({ message: "Recensione rimossa.", tone: "success" });
-    } catch (error) {
-      setStatusMessage({ message: formatApiErrorMessage(error), tone: "error" });
-    } finally {
-      setActionLoading(false);
-    }
-  }
 
   return (
     <div className="min-h-screen bg-[#f3f5f2] text-[#1f2b20]">
@@ -322,58 +147,21 @@ export default function MagazzinoPage() {
                 </div>
               </div>
 
-              <div className="mt-4 rounded-2xl border border-[#16A34A]/15 bg-[#ecfce7] px-4 py-3">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="text-[11px] font-semibold text-[#1f2b20]">
-                    Prodotti selezionati: {selectedRows.length}
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2">
-                    {batchHref ? (
-                      <Link
-                        href={batchHref}
-                        className="inline-flex h-9 items-center justify-center rounded-lg border border-black/5 bg-[#F3F5F7] px-4 text-[11px] font-semibold text-[#1f2b20] hover:cursor-pointer hover:bg-black/5"
-                      >
-                        Modifica in blocco
-                      </Link>
-                    ) : (
-                      <button
-                        type="button"
-                        disabled
-                        className="inline-flex h-9 items-center justify-center rounded-lg border border-black/5 bg-[#F3F5F7] px-4 text-[11px] font-semibold text-[#9aa39a]"
-                      >
-                        Modifica in blocco
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      disabled={selectedArticleIds.length < 2 || actionLoading}
-                      onClick={() => void handleGroupVariants()}
-                      className="inline-flex h-9 items-center justify-center rounded-lg border border-black/5 bg-[#F3F5F7] px-4 text-[11px] font-semibold text-[#1f2b20] hover:cursor-pointer hover:bg-black/5 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      Raggruppa varianti
-                    </button>
-                    <button
-                      type="button"
-                      disabled={selectedArticleIds.length === 0 || actionLoading}
-                      onClick={() => void handleBulkPause()}
-                      className="inline-flex h-9 items-center justify-center rounded-lg border border-black/5 bg-[#F3F5F7] px-4 text-[11px] font-semibold text-[#1f2b20] hover:cursor-pointer hover:bg-black/5 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      Metti in pausa
-                    </button>
-                    <button
-                      type="button"
-                      disabled={selectedArticleIds.length === 0 || actionLoading}
-                      onClick={() => void handleBulkRemove()}
-                      className="inline-flex h-9 items-center justify-center rounded-lg border border-black/5 bg-[#F3F5F7] px-4 text-[11px] font-semibold text-[#b42318] hover:cursor-pointer hover:bg-black/5 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      Elimina
-                    </button>
-                  </div>
-                </div>
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+                <p className="text-[11px] font-semibold text-[#6b7280]">
+                  Anteprima catalogo · {previewRows.length} di {tableRows.length} prodotti
+                </p>
+                {tableRows.length > MAGAZZINO_PREVIEW_LIMIT ? (
+                  <Link
+                    href="/dashboard/magazzino/catalogo"
+                    className="text-[11px] font-semibold text-[#16A34A] hover:cursor-pointer hover:underline"
+                  >
+                    Apri catalogo completo
+                  </Link>
+                ) : null}
               </div>
 
-              <div className="mt-4">
+              <div className="mt-2">
                 {loading ? (
                   <div className="flex items-center justify-center rounded-3xl bg-white py-16 shadow-[0_12px_28px_rgba(16,24,16,0.06)]">
                     <Loader2 className="h-6 w-6 animate-spin text-[#214e3a]" />
@@ -396,15 +184,11 @@ export default function MagazzinoPage() {
                   </div>
                 ) : (
                   <ProductsTable
-                    rows={tableRows}
-                    title=""
-                    selectable
-                    onSelectionChange={setSelectedRows}
-                    rowActionHrefBuilder={(row) =>
-                      row.action === "Rifornisci"
-                        ? `/dashboard/magazzino/gestione?mode=restock&id=${encodeURIComponent(row.sku)}`
-                        : `/dashboard/magazzino/gestione?mode=edit&id=${encodeURIComponent(row.sku)}`
-                    }
+                    rows={previewRows}
+                    footerHref="/dashboard/magazzino/catalogo"
+                    footerLabel="Visualizza tutto il magazzino"
+                    showFooterLink={tableRows.length > MAGAZZINO_PREVIEW_LIMIT}
+                    rowActionHrefBuilder={rowActionHrefBuilder}
                   />
                 )}
               </div>
