@@ -1701,6 +1701,13 @@ export default function ImpostazioniPage() {
                     <ul className="mt-4 flex flex-col gap-3">
                       <li className="flex items-center justify-between gap-3 rounded-xl bg-[#F8F9FA] px-4 py-3">
                         <div>
+                          <div className="text-[13px] font-semibold text-[#111827]">Commissione 3Rate</div>
+                          <div className="text-[11px] text-[#6b7280]">Commissione piattaforma su ogni vendita</div>
+                        </div>
+                        <span className="shrink-0 text-[15px] font-bold text-[#111827]">0.5%</span>
+                      </li>
+                      <li className="flex items-center justify-between gap-3 rounded-xl bg-[#F8F9FA] px-4 py-3">
+                        <div>
                           <div className="text-[13px] font-semibold text-[#111827]">Commissione Klarna</div>
                           <div className="text-[11px] text-[#6b7280]">Per ogni transazione rateale</div>
                         </div>
