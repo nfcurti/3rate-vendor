@@ -40,6 +40,7 @@ import {
   businessAuthApi,
   getBusinessAuthToken,
   logoutBusinessSession,
+  resolvePayohMediaUrl,
 } from "@/lib/business-auth";
 import { businessBillingApi, type BillingInfo, type BillingInvoice } from "@/lib/business-billing";
 import { statusAlertClass } from "@/lib/api-fallback";
@@ -411,7 +412,9 @@ export default function ImpostazioniPage() {
 
         setIsValidated(Boolean(account?.isValidated));
         setHasBusinessInfo(Boolean(info?._id));
-        setProfilePictureUrl(info?.profilePictureUrl ?? null);
+        setProfilePictureUrl(
+          resolvePayohMediaUrl(info?.profilePictureUrl) || null
+        );
         const loadedProvince = normalizeProvinceCode(normalizeLoadedField(info?.province));
         const loadedRegion =
           normalizeLoadedField(info?.region) || findRegionByProvinceCode(loadedProvince) || "";
@@ -943,7 +946,9 @@ export default function ImpostazioniPage() {
     try {
       const imageUrl = await uploadBusinessImage(file);
       const updated = await businessInfoApi.updateAvatar(imageUrl);
-      setProfilePictureUrl(updated.profilePictureUrl ?? imageUrl);
+      setProfilePictureUrl(
+        resolvePayohMediaUrl(updated.profilePictureUrl ?? imageUrl) || null
+      );
       setProfileStatus({
         message: "Foto profilo aggiornata.",
         tone: "success",

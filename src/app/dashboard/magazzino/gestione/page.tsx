@@ -4,7 +4,7 @@ import { ImagePlus, Loader2, Package, Save, Trash2, Upload, WandSparkles } from 
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import clsx from "clsx";
-import { formatApiErrorMessage } from "@/lib/business-auth";
+import { formatApiErrorMessage, resolvePayohMediaUrl } from "@/lib/business-auth";
 import {
   businessArticlesApi,
   getShippingOptions,
@@ -594,7 +594,7 @@ function GestioneMagazzinoContent() {
                                 <div className="relative aspect-[4/3] max-h-56 w-full bg-[#f3f4f6] sm:max-w-sm">
                                   {/* eslint-disable-next-line @next/next/no-img-element */}
                                   <img
-                                    src={imageUrl}
+                                    src={resolvePayohMediaUrl(imageUrl) || imageUrl}
                                     alt={imageName || "Anteprima prodotto"}
                                     className="h-full w-full object-cover"
                                   />

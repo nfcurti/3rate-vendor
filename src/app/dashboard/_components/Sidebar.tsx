@@ -15,6 +15,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   getBusinessAccountId,
   logoutBusinessSession,
+  resolvePayohMediaUrl,
 } from "@/lib/business-auth";
 import { businessInfoApi, getBusinessInitials } from "@/lib/business-info";
 
@@ -167,7 +168,9 @@ export function Sidebar() {
       const email = normalizeDisplayName(payload.account?.email);
 
       setStoreName(businessName || email || "Il mio negozio");
-      setProfilePictureUrl(payload.info?.profilePictureUrl ?? null);
+      setProfilePictureUrl(
+        resolvePayohMediaUrl(payload.info?.profilePictureUrl) || null
+      );
       setAccountId(payload.account?._id ?? payload.info?.businessAccountId ?? getBusinessAccountId());
     } catch {
       setAccountId(getBusinessAccountId());

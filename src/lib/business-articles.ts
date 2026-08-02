@@ -1,4 +1,4 @@
-import { getBusinessAuthToken, payohRequest } from "./business-auth";
+import { getBusinessAuthToken, payohRequest, resolvePayohMediaUrl } from "./business-auth";
 import type { ProductCategory } from "./business-info";
 import type { ProductRow } from "@/app/dashboard/_components/ProductsTable";
 
@@ -243,7 +243,7 @@ export function articleToProductRow(
     category: getArticleCategoryLabel(article, categoryNamesById),
     sku: articleId,
     variants: variantCount > 1 ? `+${variantCount - 1} Varianti` : undefined,
-    imageUrl: article.imagesUrls?.[0],
+    imageUrl: resolvePayohMediaUrl(article.imagesUrls?.[0]) || undefined,
     perf: [
       ["Vendite:", analytics?.sales != null ? String(analytics.sales) : "—"],
       ["Unità vendute:", analytics?.sales != null ? String(analytics.sales) : "—"],

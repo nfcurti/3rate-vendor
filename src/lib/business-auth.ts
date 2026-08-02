@@ -11,6 +11,34 @@ const resolveApiBaseUrl = () => {
   return "";
 };
 
+/** Rewrite backend upload/content URLs through the Next.js proxy for <img src>. */
+export const resolvePayohMediaUrl = (url?: string | null) => {
+  const trimmed = url?.trim() || "";
+  if (!trimmed) return "";
+
+  try {
+    const parsed = new URL(
+      trimmed,
+      typeof window !== "undefined" ? window.location.origin : "http://localhost"
+    );
+    if (parsed.pathname.startsWith("/uploads/content/")) {
+      if (typeof window !== "undefined") {
+        return `/api/payoh${parsed.pathname}${parsed.search}`;
+      }
+      const apiBase = sanitizeBaseUrl(
+        process.env.PAYOH_API_BASE_URL ||
+          process.env.NEXT_PUBLIC_PAYOH_API_BASE_URL ||
+          ""
+      );
+      return apiBase ? `${apiBase}${parsed.pathname}${parsed.search}` : trimmed;
+    }
+  } catch {
+    return trimmed;
+  }
+
+  return trimmed;
+};
+
 export const BUSINESS_AUTH_TOKEN_KEY = "payoh_business_auth_token";
 export const BUSINESS_ACCOUNT_ID_KEY = "payoh_business_account_id";
 export const BUSINESS_SESSION_SAVED_EVENT = "payoh:business-session-saved";
