@@ -16,6 +16,7 @@ import {
   getBusinessAccountId,
   logoutBusinessSession,
   resolvePayohMediaUrl,
+  toIdString,
 } from "@/lib/business-auth";
 import { businessInfoApi, getBusinessInitials } from "@/lib/business-info";
 
@@ -171,7 +172,11 @@ export function Sidebar() {
       setProfilePictureUrl(
         resolvePayohMediaUrl(payload.info?.profilePictureUrl) || null
       );
-      setAccountId(payload.account?._id ?? payload.info?.businessAccountId ?? getBusinessAccountId());
+      setAccountId(
+        toIdString(payload.account?._id) ??
+          toIdString(payload.info?.businessAccountId) ??
+          getBusinessAccountId()
+      );
     } catch {
       setAccountId(getBusinessAccountId());
     }

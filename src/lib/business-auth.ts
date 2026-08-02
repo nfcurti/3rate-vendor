@@ -11,6 +11,36 @@ const resolveApiBaseUrl = () => {
   return "";
 };
 
+/** Normalize Mongo ObjectId / `{ buffer }` payloads to a hex string. */
+export const toIdString = (value: unknown): string | null => {
+  if (value == null) return null;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed || null;
+  }
+  if (typeof value === "object") {
+    const maybe = value as {
+      toHexString?: () => string;
+      toString?: () => string;
+      buffer?: { data?: unknown } | ArrayBuffer | Uint8Array;
+    };
+    if (typeof maybe.toHexString === "function") {
+      return maybe.toHexString();
+    }
+    if (
+      maybe.buffer &&
+      typeof maybe.buffer === "object" &&
+      Array.isArray((maybe.buffer as { data?: unknown }).data)
+    ) {
+      const data = (maybe.buffer as { data: number[] }).data;
+      if (data.every((n) => typeof n === "number")) {
+        return data.map((n) => n.toString(16).padStart(2, "0")).join("");
+      }
+    }
+  }
+  return null;
+};
+
 /** Rewrite backend upload/content URLs through the Next.js proxy for <img src>. */
 export const resolvePayohMediaUrl = (url?: string | null) => {
   const trimmed = url?.trim() || "";
@@ -274,7 +304,8 @@ const notifySessionCleared = () => {
 
 export const saveBusinessSession = ({ token, accountId }: AuthSession) => {
   localStorage.setItem(BUSINESS_AUTH_TOKEN_KEY, token);
-  localStorage.setItem(BUSINESS_ACCOUNT_ID_KEY, accountId);
+  const normalizedId = toIdString(accountId) ?? String(accountId ?? "");
+  localStorage.setItem(BUSINESS_ACCOUNT_ID_KEY, normalizedId);
   notifySessionSaved();
 };
 
