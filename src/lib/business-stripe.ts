@@ -40,3 +40,9 @@ export const maskStripeAccountId = (accountId?: string) => {
   if (accountId.length <= 8) return accountId;
   return `${accountId.slice(0, 5)}${"•".repeat(8)}${accountId.slice(-4)}`;
 };
+
+export const STRIPE_REQUIRED_FOR_PRODUCT_MESSAGE =
+  "Per aggiungere un nuovo prodotto devi prima collegare il conto bancario con Stripe Connect.";
+
+export const isStripeConnectReady = (status: StripeConnectStatus | null | undefined) =>
+  Boolean(status?.connected && status.onboardingComplete);

@@ -28,6 +28,23 @@ export type CurrentSubscription = {
   plan?: SubscriptionPlan;
 } | null;
 
+export type BusinessPaymentMethod = {
+  _id?: string;
+  id?: string;
+  brand?: string;
+  last4?: string;
+  expMonth?: number;
+  expYear?: number;
+  isDefault?: boolean;
+};
+
+export type AddPaymentMethodPayload = {
+  clientSecret?: string | null;
+  setupIntentId?: string | null;
+  url?: string | null;
+  redirectUrl?: string | null;
+};
+
 export const businessSubscriptionApi = {
   getPlans: () =>
     payohRequest<SubscriptionPlan[]>("/business/subscription/plans", undefined, undefined, "GET"),
@@ -59,4 +76,40 @@ export const businessSubscriptionApi = {
       token ?? withToken(),
       "POST"
     ),
+  getPaymentMethods: (token?: string) =>
+    payohRequest<BusinessPaymentMethod[]>(
+      "/business/subscription/payment_methods",
+      undefined,
+      token ?? withToken(),
+      "GET"
+    ),
+  addPaymentMethod: (token?: string) =>
+    payohRequest<AddPaymentMethodPayload>(
+      "/business/subscription/add_payment_method",
+      {},
+      token ?? withToken(),
+      "POST"
+    ),
+  removePaymentMethod: (paymentMethodId: string, token?: string) =>
+    payohRequest<Record<string, unknown>>(
+      "/business/subscription/remove_payment_method",
+      { paymentMethodId },
+      token ?? withToken(),
+      "POST"
+    ),
+};
+
+export const formatCardBrand = (brand?: string) => {
+  if (!brand) return "Carta";
+  const labels: Record<string, string> = {
+    visa: "Visa",
+    mastercard: "Mastercard",
+    amex: "American Express",
+    american_express: "American Express",
+    discover: "Discover",
+    diners: "Diners Club",
+    jcb: "JCB",
+    unionpay: "UnionPay",
+  };
+  return labels[brand.toLowerCase()] ?? brand;
 };

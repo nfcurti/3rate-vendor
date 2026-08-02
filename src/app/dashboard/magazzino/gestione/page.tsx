@@ -13,6 +13,11 @@ import {
 } from "@/lib/business-articles";
 import type { ProductCategory } from "@/lib/business-info";
 import { uploadBusinessImage } from "@/lib/business-info";
+import {
+  businessStripeApi,
+  isStripeConnectReady,
+  STRIPE_REQUIRED_FOR_PRODUCT_MESSAGE,
+} from "@/lib/business-stripe";
 import { DashboardViewHeader } from "../../_components/DashboardViewHeader";
 import { FormDropdown } from "../../_components/FormDropdown";
 import {
@@ -21,6 +26,7 @@ import {
   resolvePresetSelection,
 } from "../../_components/FormDropdownWithOther";
 import { Sidebar } from "../../_components/Sidebar";
+import { StripeConnectRequiredNotice } from "../../_components/StripeConnectRequiredNotice";
 import { ViewTransition } from "../../_components/ViewTransition";
 
 function parseIds(params: URLSearchParams) {
@@ -84,6 +90,7 @@ function GestioneMagazzinoContent() {
 
   const [loading, setLoading] = useState(!isCreate);
   const [saving, setSaving] = useState(false);
+  const [stripeReady, setStripeReady] = useState<boolean | null>(isCreate ? null : true);
   const [statusMessage, setStatusMessage] = useState<{
     message: string;
     tone: "error" | "success";
@@ -118,16 +125,22 @@ function GestioneMagazzinoContent() {
       setStatusMessage(null);
 
       try {
-        const [categoriesPayload, shippingPayload, listings] = await Promise.all([
+        const [categoriesPayload, shippingPayload, listings, stripeStatus] = await Promise.all([
           businessArticlesApi.getCategories(),
           getShippingOptions(),
           isCreate ? Promise.resolve([]) : businessArticlesApi.getListings(),
+          isCreate
+            ? businessStripeApi.getConnectStatus().catch(() => null)
+            : Promise.resolve(null),
         ]);
 
         if (cancelled) return;
 
         setCategories(categoriesPayload);
         setShippingOptions(shippingPayload);
+        if (isCreate) {
+          setStripeReady(isStripeConnectReady(stripeStatus));
+        }
 
         if (!isCreate && articleIds.length === 1) {
           const found = listings.find((item) => item._id === articleIds[0]) ?? null;
@@ -245,6 +258,10 @@ function GestioneMagazzinoContent() {
 
     try {
       if (isCreate) {
+        if (stripeReady !== true) {
+          throw new Error(STRIPE_REQUIRED_FOR_PRODUCT_MESSAGE);
+        }
+
         const price = parseNumber(originalPrice);
         const stock = parseNumber(totalStock);
         if (!description.trim()) throw new Error("Inserisci il nome del prodotto.");
@@ -387,6 +404,7 @@ function GestioneMagazzinoContent() {
             />
 
             <div className="mx-auto w-full max-w-6xl space-y-4 px-4 py-7 lg:px-8">
+              {isCreate && stripeReady === false ? <StripeConnectRequiredNotice /> : null}
               {statusMessage ? (
                 <p
                   className={clsx(
@@ -691,10 +709,19 @@ function GestioneMagazzinoContent() {
                       )}
                     </div>
 
-                    <div className="mt-5 flex justify-end">
+                    <div className="mt-5 flex flex-col items-end gap-3">
+                      {isCreate && stripeReady === false ? (
+                        <p className="w-full text-right text-[12px] font-semibold text-red-600">
+                          {STRIPE_REQUIRED_FOR_PRODUCT_MESSAGE}
+                        </p>
+                      ) : null}
                       <button
                         type="button"
-                        disabled={saving || uploadingImage}
+                        disabled={
+                          saving ||
+                          uploadingImage ||
+                          (isCreate && stripeReady !== true)
+                        }
                         onClick={() => void handleSubmit()}
                         className="inline-flex h-10 items-center gap-2 rounded-xl bg-[#214e3a] px-5 text-[12px] font-semibold text-white hover:cursor-pointer hover:bg-[#1a3f2e] disabled:cursor-not-allowed disabled:opacity-60"
                       >

@@ -48,6 +48,8 @@ const errorMessages: Record<string, string> = {
   INVALID_TOKEN: "Sessione scaduta. Accedi di nuovo.",
   INVALID_DATA: "Dati non validi. Controlla i campi e riprova.",
   MISSING_FIELDS: "Compila tutti i campi richiesti.",
+  PAYMENT_METHOD_REQUIRED:
+    "Aggiungi una carta di pagamento prima di attivare un piano a pagamento.",
   API_NOT_CONFIGURED:
     "Servizio temporaneamente non disponibile. Riprova tra qualche istante.",
   NETWORK_ERROR:
@@ -63,6 +65,8 @@ const errorMessages: Record<string, string> = {
   OPTIONS_FAILED: "Impossibile caricare le opzioni di spedizione.",
   NOT_FOUND: "Risorsa non trovata.",
   NOT_VALIDATED_ACCOUNT: "Account non ancora verificato.",
+  UNKNOWN_ERROR:
+    "Operazione non riuscita. Se stai collegando Stripe, verifica che STRIPE_SECRET_KEY sia configurata sul backend.",
 };
 
 const getErrorMessage = (error: string) =>

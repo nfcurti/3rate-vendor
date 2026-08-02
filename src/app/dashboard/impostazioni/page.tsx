@@ -10,12 +10,13 @@ import {
   CalendarRange,
   CheckCircle2,
   CreditCard,
+  Crosshair,
   Download,
   Eye,
   LayoutGrid,
   Loader2,
   Mail,
-  MoreVertical,
+  MapPin,
   Wallet,
   X,
 } from "lucide-react";
@@ -45,13 +46,14 @@ import { statusAlertClass } from "@/lib/api-fallback";
 import { businessNotificationsApi } from "@/lib/business-notifications";
 import {
   businessSubscriptionApi,
+  formatCardBrand,
+  type BusinessPaymentMethod,
   type CurrentSubscription,
   type SubscriptionPlan,
 } from "@/lib/business-subscription";
 import { useRouter } from "next/navigation";
 import {
   businessStripeApi,
-  maskStripeAccountId,
   type StripeConnectStatus,
 } from "@/lib/business-stripe";
 import {
@@ -60,6 +62,16 @@ import {
   ITALIAN_REGION_OPTIONS,
   normalizeProvinceCode,
 } from "@/lib/italian-regions";
+import {
+  buildAddressQuery,
+  formatCoordinate,
+  geocodeAddressQuery,
+  isValidLatitude,
+  isValidLongitude,
+  openStreetMapUrl,
+  parseCoordinateInput,
+  readBrowserCoordinates,
+} from "@/lib/geocode";
 import { DashboardHelpMenu } from "../_components/DashboardHelpMenu";
 import { DashboardViewHeader } from "../_components/DashboardViewHeader";
 import { FormDropdown } from "../_components/FormDropdown";
@@ -229,6 +241,10 @@ export default function ImpostazioniPage() {
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const [tab, setTab] = useState<(typeof TABS)[number]["id"]>("profilo");
   const [profileForm, setProfileForm] = useState(defaultProfileForm);
+  const [latitudeInput, setLatitudeInput] = useState("");
+  const [longitudeInput, setLongitudeInput] = useState("");
+  const [coordsLabel, setCoordsLabel] = useState<string | null>(null);
+  const [coordsBusy, setCoordsBusy] = useState(false);
   const [profilePictureUrl, setProfilePictureUrl] = useState<string | null>(null);
   const [hasBusinessInfo, setHasBusinessInfo] = useState(false);
   const [isValidated, setIsValidated] = useState(false);
@@ -326,6 +342,7 @@ export default function ImpostazioniPage() {
   const [fattLoading, setFattLoading] = useState(false);
   const [subscriptionPlans, setSubscriptionPlans] = useState<SubscriptionPlan[]>([]);
   const [currentSubscription, setCurrentSubscription] = useState<CurrentSubscription>(null);
+  const [paymentMethods, setPaymentMethods] = useState<BusinessPaymentMethod[]>([]);
   const [billingInvoices, setBillingInvoices] = useState<BillingInvoice[]>([]);
   const [billingSummary, setBillingSummary] = useState<BillingInfo>({});
   const [fattStatus, setFattStatus] = useState<{
@@ -342,6 +359,29 @@ export default function ImpostazioniPage() {
   }, [subscriptionPlans, fattCycle]);
 
   const activePlanId = currentSubscription?.subscription?.planId ?? currentSubscription?.plan?._id;
+  const isPaidPlan = (currentSubscription?.plan?.priceEur ?? 0) > 0;
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const requested = params.get("tab");
+    const match = TABS.find((entry) => entry.id === requested);
+    if (match) setTab(match.id);
+
+    const paymentAdded = params.get("payment_method") === "added";
+    if (params.has("stripe") || paymentAdded) {
+      params.delete("stripe");
+      params.delete("payment_method");
+      const query = params.toString();
+      const nextUrl = `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`;
+      window.history.replaceState(null, "", nextUrl);
+      if (paymentAdded) {
+        setFattStatus({
+          message: "Carta collegata con successo.",
+          tone: "success",
+        });
+      }
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -391,6 +431,13 @@ export default function ImpostazioniPage() {
           province: loadedProvince,
           region: loadedRegion,
         });
+        setLatitudeInput(
+          typeof info?.latitude === "number" ? formatCoordinate(info.latitude) : ""
+        );
+        setLongitudeInput(
+          typeof info?.longitude === "number" ? formatCoordinate(info.longitude) : ""
+        );
+        setCoordsLabel(null);
 
         const [storeDescPayload, openingHoursPayload, categoriesPayload] =
           await Promise.all([
@@ -478,19 +525,20 @@ export default function ImpostazioniPage() {
 
     async function loadFatturazione() {
       setFattLoading(true);
-      setFattStatus(null);
       try {
-        const [plans, current, invoices, billingInfo] = await Promise.all([
+        const [plans, current, invoices, billingInfo, methods] = await Promise.all([
           businessSubscriptionApi.getPlans(),
           businessSubscriptionApi.getCurrent(),
           businessBillingApi.getInvoices(),
           businessBillingApi.getInfo(),
+          businessSubscriptionApi.getPaymentMethods().catch(() => []),
         ]);
         if (cancelled) return;
         setSubscriptionPlans(Array.isArray(plans) ? plans : []);
         setCurrentSubscription(current);
         setBillingInvoices(Array.isArray(invoices) ? invoices : []);
         setBillingSummary((billingInfo ?? {}) as BillingInfo);
+        setPaymentMethods(Array.isArray(methods) ? methods : []);
       } catch (error) {
         if (!cancelled) {
           setFattStatus({ message: formatApiErrorMessage(error), tone: "error" });
@@ -501,20 +549,81 @@ export default function ImpostazioniPage() {
     }
 
     void loadFatturazione();
+
+    const handleFocus = () => {
+      void businessSubscriptionApi
+        .getPaymentMethods()
+        .then((methods) => {
+          if (!cancelled) setPaymentMethods(Array.isArray(methods) ? methods : []);
+        })
+        .catch(() => undefined);
+    };
+    window.addEventListener("focus", handleFocus);
+
     return () => {
       cancelled = true;
+      window.removeEventListener("focus", handleFocus);
     };
   }, [tab]);
 
   async function handleChangePlan(planId: string) {
     if (!planId || planId === activePlanId) return;
+    const plan = subscriptionPlans.find((entry) => entry._id === planId);
+    if ((plan?.priceEur ?? 0) > 0 && paymentMethods.length === 0) {
+      setFattStatus({
+        message:
+          "Aggiungi una carta di pagamento prima di attivare il Piano Pro (29 €/mese).",
+        tone: "error",
+      });
+      return;
+    }
+
     setFattActionLoading(true);
     setFattStatus(null);
     try {
       await businessSubscriptionApi.changePlan(planId);
       const current = await businessSubscriptionApi.getCurrent();
       setCurrentSubscription(current);
-      setFattStatus({ message: "Piano aggiornato con successo.", tone: "success" });
+      setFattStatus({
+        message:
+          (plan?.priceEur ?? 0) > 0
+            ? "Piano Pro attivato. Ti verranno addebitati 29 € al mese."
+            : "Sei passato al Piano Starter.",
+        tone: "success",
+      });
+    } catch (error) {
+      const message = formatApiErrorMessage(error);
+      setFattStatus({
+        message:
+          message.includes("non validi") || message.includes("Dati non validi")
+            ? "Aggiungi una carta di pagamento prima di attivare un piano a pagamento."
+            : message,
+        tone: "error",
+      });
+    } finally {
+      setFattActionLoading(false);
+    }
+  }
+
+  async function handleCancelSubscription() {
+    if (!isPaidPlan) {
+      setFattStatus({
+        message: "Il Piano Starter è gratuito e non richiede cancellazione.",
+        tone: "error",
+      });
+      return;
+    }
+    if (!window.confirm("Vuoi cancellare l'abbonamento Pro e tornare al Piano Starter?")) return;
+    setFattActionLoading(true);
+    setFattStatus(null);
+    try {
+      await businessSubscriptionApi.cancel();
+      const current = await businessSubscriptionApi.getCurrent();
+      setCurrentSubscription(current);
+      setFattStatus({
+        message: "Abbonamento Pro cancellato. Sei tornato al Piano Starter.",
+        tone: "success",
+      });
     } catch (error) {
       setFattStatus({ message: formatApiErrorMessage(error), tone: "error" });
     } finally {
@@ -522,14 +631,33 @@ export default function ImpostazioniPage() {
     }
   }
 
-  async function handleCancelSubscription() {
-    if (!window.confirm("Vuoi cancellare l'abbonamento?")) return;
+  async function handleAddPaymentMethod() {
     setFattActionLoading(true);
     setFattStatus(null);
     try {
-      await businessSubscriptionApi.cancel();
-      setCurrentSubscription(null);
-      setFattStatus({ message: "Abbonamento cancellato.", tone: "success" });
+      const payload = await businessSubscriptionApi.addPaymentMethod();
+      const url = payload.url || payload.redirectUrl;
+      if (!url) throw new Error("Link Stripe non disponibile. Riprova.");
+      const opened = window.open(url, "_blank", "noopener,noreferrer");
+      if (!opened) {
+        throw new Error("Impossibile aprire Stripe in una nuova scheda. Controlla il blocco popup.");
+      }
+    } catch (error) {
+      setFattStatus({ message: formatApiErrorMessage(error), tone: "error" });
+    } finally {
+      setFattActionLoading(false);
+    }
+  }
+
+  async function handleRemovePaymentMethod(paymentMethodId: string) {
+    if (!window.confirm("Vuoi rimuovere questa carta?")) return;
+    setFattActionLoading(true);
+    setFattStatus(null);
+    try {
+      await businessSubscriptionApi.removePaymentMethod(paymentMethodId);
+      const methods = await businessSubscriptionApi.getPaymentMethods();
+      setPaymentMethods(Array.isArray(methods) ? methods : []);
+      setFattStatus({ message: "Carta rimossa.", tone: "success" });
     } catch (error) {
       setFattStatus({ message: formatApiErrorMessage(error), tone: "error" });
     } finally {
@@ -576,12 +704,16 @@ export default function ImpostazioniPage() {
       if (!payload.url) {
         throw new Error("Link di configurazione Stripe non disponibile.");
       }
-      window.location.href = payload.url;
+      const opened = window.open(payload.url, "_blank", "noopener,noreferrer");
+      if (!opened) {
+        throw new Error("Impossibile aprire Stripe in una nuova scheda. Controlla il blocco popup.");
+      }
     } catch (error) {
       setStripeStatus({
         message: formatApiErrorMessage(error),
         tone: "error",
       });
+    } finally {
       setStripeOnboarding(false);
     }
   }
@@ -619,6 +751,78 @@ export default function ImpostazioniPage() {
     return options;
   }, [profileForm.province, profileForm.region]);
 
+  const parsedLatitude = parseCoordinateInput(latitudeInput);
+  const parsedLongitude = parseCoordinateInput(longitudeInput);
+  const hasValidCoordinates =
+    parsedLatitude !== null &&
+    parsedLongitude !== null &&
+    isValidLatitude(parsedLatitude) &&
+    isValidLongitude(parsedLongitude);
+
+  function applyCoordinates(latitude: number, longitude: number, label?: string | null) {
+    setLatitudeInput(formatCoordinate(latitude));
+    setLongitudeInput(formatCoordinate(longitude));
+    setCoordsLabel(label?.trim() ? label : null);
+  }
+
+  async function handleGeocodeFromAddress() {
+    if (!hasCompleteAddress(profileForm)) {
+      setProfileStatus({
+        message: "Compila l'indirizzo completo prima di ottenere le coordinate.",
+        tone: "error",
+      });
+      return;
+    }
+
+    setCoordsBusy(true);
+    setProfileStatus(null);
+    try {
+      const result = await geocodeAddressQuery(buildAddressQuery(profileForm));
+      applyCoordinates(result.latitude, result.longitude, result.label);
+      setProfileStatus({
+        message: "Coordinate ottenute dall'indirizzo.",
+        tone: "success",
+      });
+    } catch (error) {
+      setProfileStatus({
+        message: formatApiErrorMessage(error),
+        tone: "error",
+      });
+    } finally {
+      setCoordsBusy(false);
+    }
+  }
+
+  async function handleUseBrowserLocation() {
+    setCoordsBusy(true);
+    setProfileStatus(null);
+    try {
+      const result = await readBrowserCoordinates();
+      applyCoordinates(result.latitude, result.longitude, "Posizione del dispositivo");
+      setProfileStatus({
+        message: "Coordinate rilevate dalla tua posizione.",
+        tone: "success",
+      });
+    } catch (error) {
+      setProfileStatus({
+        message: formatApiErrorMessage(error),
+        tone: "error",
+      });
+    } finally {
+      setCoordsBusy(false);
+    }
+  }
+
+  async function resolveCoordinatesForSave() {
+    if (hasValidCoordinates) {
+      return { latitude: parsedLatitude!, longitude: parsedLongitude! };
+    }
+
+    const result = await geocodeAddressQuery(buildAddressQuery(profileForm));
+    applyCoordinates(result.latitude, result.longitude, result.label);
+    return { latitude: result.latitude, longitude: result.longitude };
+  }
+
   async function handleSaveProfile() {
     setProfileStatus(null);
 
@@ -642,6 +846,8 @@ export default function ImpostazioniPage() {
     setProfileSaving(true);
 
     try {
+      const coordinates = await resolveCoordinatesForSave();
+
       const { info: updatedInfo, address: updatedAddress } = await saveBusinessProfile({
         business: {
           ragioneSociale: profileForm.ragioneSociale,
@@ -661,9 +867,10 @@ export default function ImpostazioniPage() {
           city: profileForm.city,
           province: profileForm.province,
           region: profileForm.region,
+          latitude: coordinates.latitude,
+          longitude: coordinates.longitude,
         },
       });
-
       const [updatedStore, updatedHours] = await Promise.all([
         businessInfoApi.updateStoreDescription({
           storeDescription: storeDescription.trim(),
@@ -702,6 +909,16 @@ export default function ImpostazioniPage() {
         province: normalizeLoadedField(updatedAddress.province) || prev.province,
         region: normalizeLoadedField(updatedAddress.region) || prev.region,
       }));
+      setLatitudeInput(
+        typeof updatedAddress.latitude === "number"
+          ? formatCoordinate(updatedAddress.latitude)
+          : formatCoordinate(coordinates.latitude)
+      );
+      setLongitudeInput(
+        typeof updatedAddress.longitude === "number"
+          ? formatCoordinate(updatedAddress.longitude)
+          : formatCoordinate(coordinates.longitude)
+      );
       setHasBusinessInfo(true);
       setProfileStatus({
         message: "Profilo negozio aggiornato.",
@@ -1236,6 +1453,77 @@ export default function ImpostazioniPage() {
                           />
                         </div>
                       </div>
+
+                      <div className="rounded-xl border border-black/10 bg-[#F8FAF8] p-4">
+                        <div className="flex items-start gap-3">
+                          <span className="mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#DFEED6] text-[#2D4F36]">
+                            <MapPin className="h-4 w-4" />
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <div className="text-[13px] font-bold text-[#111827]">
+                              Posizione sulla mappa
+                            </div>
+                            <p className="mt-1 text-[11px] leading-relaxed text-[#6b7280]">
+                              Serve per ritiri in negozio e ricerca nelle vicinanze. Impostala
+                              dall&apos;indirizzo o dalla tua posizione attuale.
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+                          <button
+                            type="button"
+                            onClick={() => void handleGeocodeFromAddress()}
+                            disabled={profileSaving || coordsBusy}
+                            className="inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-xl border border-black/10 bg-white px-3 text-[12px] font-semibold text-[#1f2b20] hover:cursor-pointer hover:bg-black/[0.03] disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {coordsBusy ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <MapPin className="h-4 w-4" />
+                            )}
+                            Ottieni da indirizzo
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleUseBrowserLocation()}
+                            disabled={profileSaving || coordsBusy}
+                            className="inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-xl border border-black/10 bg-white px-3 text-[12px] font-semibold text-[#1f2b20] hover:cursor-pointer hover:bg-black/[0.03] disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {coordsBusy ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Crosshair className="h-4 w-4" />
+                            )}
+                            Usa la mia posizione
+                          </button>
+                        </div>
+
+                        {hasValidCoordinates ? (
+                          <div className="mt-3 rounded-lg bg-white px-3 py-2.5 text-[11px] text-[#374151] ring-1 ring-black/5">
+                            <div className="font-semibold text-[#2d4f36]">
+                              Posizione impostata
+                            </div>
+                            {coordsLabel ? (
+                              <p className="mt-1 line-clamp-2 text-[#6b7280]">{coordsLabel}</p>
+                            ) : null}
+                            <a
+                              href={openStreetMapUrl(parsedLatitude!, parsedLongitude!)}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="mt-2 inline-flex font-semibold text-[#2d4f36] underline hover:cursor-pointer"
+                            >
+                              Verifica sulla mappa
+                            </a>
+                          </div>
+                        ) : (
+                          <p className="mt-3 text-[11px] text-[#9ca3af]">
+                            Nessuna posizione impostata. Al salvataggio proveremo a
+                            ottenerla automaticamente dall&apos;indirizzo.
+                          </p>
+                        )}
+                      </div>
+
                       <div>
                         <FieldLabel>Descrizione negozio</FieldLabel>
                         <textarea
@@ -1488,12 +1776,6 @@ export default function ImpostazioniPage() {
 
                         <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
                           <div>
-                            <div className="text-[10px] font-medium text-white/65">Account ID</div>
-                            <div className="mt-0.5 font-mono text-[12px] font-semibold">
-                              {maskStripeAccountId(stripeConnect.accountId)}
-                            </div>
-                          </div>
-                          <div>
                             <div className="text-[10px] font-medium text-white/65">Accrediti</div>
                             <div className="mt-0.5 text-[12px] font-semibold">
                               {stripeConnect.payoutsEnabled ? "Abilitati" : "In verifica"}
@@ -1536,11 +1818,6 @@ export default function ImpostazioniPage() {
                               Hai iniziato la configurazione Stripe ma non l&apos;hai ancora completata.
                               Termina l&apos;onboarding per ricevere pagamenti e accrediti.
                             </p>
-                            {stripeConnect.accountId ? (
-                              <p className="mt-2 font-mono text-[11px] text-[#6b7280]">
-                                {maskStripeAccountId(stripeConnect.accountId)}
-                              </p>
-                            ) : null}
                           </div>
                         </div>
                         <button
@@ -2231,29 +2508,35 @@ export default function ImpostazioniPage() {
                         <span className="shrink-0 rounded-full bg-[#7CCB42] px-4 py-1.5 text-sm font-extrabold uppercase tracking-tight text-[#29553a]">
                           {currentSubscription?.subscription?.status === "active"
                             ? "Attivo"
-                            : currentSubscription?.subscription?.status ?? "Nessun piano"}
+                            : currentSubscription?.subscription?.status === "past_due"
+                              ? "In ritardo"
+                              : "Nessun piano"}
                         </span>
                       </div>
                       <div className="mt-6 flex flex-col gap-2 rounded-lg bg-white/12 px-6 py-5 ring-1 ring-white/10 sm:flex-row sm:items-center sm:justify-between">
                         <div className="text-sm font-semibold text-white/95">
-                          {currentSubscription?.plan?.name ?? "Nessun abbonamento attivo"}
+                          {currentSubscription?.plan?.name ?? "Piano Starter"}
                         </div>
                         <div className="text-sm font-medium text-white/75">
-                          {currentSubscription?.subscription?.currentPeriodEnd
+                          {isPaidPlan && currentSubscription?.subscription?.currentPeriodEnd
                             ? `Prossimo addebito: ${new Intl.DateTimeFormat("it-IT", {
                                 day: "numeric",
                                 month: "long",
                                 year: "numeric",
                               }).format(new Date(currentSubscription.subscription.currentPeriodEnd))}`
-                            : "—"}
+                            : isPaidPlan
+                              ? "Fatturazione mensile"
+                              : "Piano gratuito"}
                         </div>
                         <div className="text-2xl font-bold tabular-nums tracking-tight text-white">
                           {typeof currentSubscription?.plan?.priceEur === "number"
                             ? new Intl.NumberFormat("it-IT", {
                                 style: "currency",
                                 currency: "EUR",
+                                maximumFractionDigits: 0,
                               }).format(currentSubscription.plan.priceEur)
-                            : "—"}
+                            : "0 €"}
+                          <span className="ml-1 text-sm font-medium text-white/70">/mese</span>
                         </div>
                       </div>
                       <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -2271,13 +2554,14 @@ export default function ImpostazioniPage() {
                         <button
                           type="button"
                           disabled={fattActionLoading || fattLoading}
+                          onClick={() => void handleAddPaymentMethod()}
                           className="inline-flex items-center justify-center rounded-[14px] bg-[#5e816d] px-4 py-3 text-[10px] font-semibold text-white transition-colors hover:cursor-pointer hover:bg-[#678a75] disabled:cursor-not-allowed disabled:opacity-60"
                         >
                           Modifica metodo pagamento
                         </button>
                         <button
                           type="button"
-                          disabled={fattActionLoading || fattLoading || !currentSubscription}
+                          disabled={fattActionLoading || fattLoading || !isPaidPlan}
                           onClick={() => void handleCancelSubscription()}
                           className="inline-flex items-center justify-center rounded-[14px] bg-[#5e816d] px-4 py-3 text-[10px] font-semibold text-white transition-colors hover:cursor-pointer hover:bg-[#678a75] disabled:cursor-not-allowed disabled:opacity-60"
                         >
@@ -2292,30 +2576,68 @@ export default function ImpostazioniPage() {
                       <h2 className="text-lg font-bold tracking-tight text-[#111827]">
                         Metodi di pagamento
                       </h2>
-                      <div className="mt-6 flex items-center justify-between gap-3 rounded-[16px] border border-[#E5E7EB] bg-[#F9FAFB] px-6 py-5">
-                        <div className="min-w-0">
-                          <div className="text-md font-semibold text-[#111827]">
-                            {currentSubscription?.subscription?.stripeSubscriptionId
-                              ? "Metodo di pagamento Stripe"
-                              : "Nessun metodo configurato"}
+                      <div className="mt-6 space-y-3">
+                        {fattLoading ? (
+                          <div className="flex items-center justify-center rounded-[16px] border border-[#E5E7EB] bg-[#F9FAFB] px-6 py-8 text-[#6b7280]">
+                            <Loader2 className="mr-2 size-4 animate-spin" />
+                            Caricamento carte...
                           </div>
-                          <div className="mt-1 text-sm text-[#667085]">
-                            Gestito tramite Stripe al momento del cambio piano.
+                        ) : paymentMethods.length ? (
+                          paymentMethods.map((method) => {
+                            const methodId = method.id || method._id || "";
+                            return (
+                              <div
+                                key={methodId}
+                                className="flex items-center justify-between gap-3 rounded-[16px] border border-[#E5E7EB] bg-[#F9FAFB] px-5 py-4"
+                              >
+                                <div className="flex min-w-0 items-center gap-3">
+                                  <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white text-[#2E5B41] ring-1 ring-black/5">
+                                    <CreditCard className="h-5 w-5" />
+                                  </span>
+                                  <div className="min-w-0">
+                                    <div className="text-md font-semibold text-[#111827]">
+                                      {formatCardBrand(method.brand)} •••• {method.last4 ?? "----"}
+                                      {method.isDefault ? (
+                                        <span className="ml-2 rounded-full bg-[#ecf8eb] px-2 py-0.5 text-[10px] font-bold uppercase text-[#2d4f36]">
+                                          Predefinita
+                                        </span>
+                                      ) : null}
+                                    </div>
+                                    <div className="mt-1 text-sm text-[#667085]">
+                                      Scade {String(method.expMonth ?? "").padStart(2, "0")}/
+                                      {method.expYear ?? "----"}
+                                    </div>
+                                  </div>
+                                </div>
+                                <button
+                                  type="button"
+                                  disabled={fattActionLoading || !methodId}
+                                  onClick={() => methodId && void handleRemovePaymentMethod(methodId)}
+                                  className="shrink-0 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold text-red-600 hover:cursor-pointer hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  Rimuovi
+                                </button>
+                              </div>
+                            );
+                          })
+                        ) : (
+                          <div className="rounded-[16px] border border-[#E5E7EB] bg-[#F9FAFB] px-6 py-5">
+                            <div className="text-md font-semibold text-[#111827]">
+                              Nessuna carta collegata
+                            </div>
+                            <div className="mt-1 text-sm text-[#667085]">
+                              Aggiungi una carta per attivare il Piano Pro a 29 €/mese.
+                            </div>
                           </div>
-                        </div>
-                        <button
-                          type="button"
-                          className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg text-[#98A2B3] hover:cursor-pointer hover:bg-black/5"
-                          aria-label="Altre azioni carta"
-                        >
-                          <MoreVertical className="size-4" strokeWidth={2.5} />
-                        </button>
+                        )}
                       </div>
                       <button
                         type="button"
-                        className="mt-6 w-full rounded-[14px] bg-[#2E5B41] py-3 text-md font-semibold text-white transition-colors hover:cursor-pointer hover:bg-[#274D37]"
+                        disabled={fattActionLoading || fattLoading}
+                        onClick={() => void handleAddPaymentMethod()}
+                        className="mt-6 w-full rounded-[14px] bg-[#2E5B41] py-3 text-md font-semibold text-white transition-colors hover:cursor-pointer hover:bg-[#274D37] disabled:cursor-not-allowed disabled:opacity-60"
                       >
-                        Aggiungi carta
+                        {fattActionLoading ? "Apertura Stripe..." : "Aggiungi carta"}
                       </button>
                     </section>
                   </div>
@@ -2378,6 +2700,11 @@ export default function ImpostazioniPage() {
                             )}
                           >
                             <div className="text-[14px] font-bold text-[#111827]">{plan.name}</div>
+                            {plan.description ? (
+                              <p className="mt-1 text-[11px] leading-snug text-[#6b7280]">
+                                {plan.description}
+                              </p>
+                            ) : null}
                             <div className="mt-2 flex items-baseline gap-1">
                               <span className="text-[26px] font-bold tabular-nums text-[#111827]">
                                 {new Intl.NumberFormat("it-IT", {
@@ -2386,7 +2713,9 @@ export default function ImpostazioniPage() {
                                   maximumFractionDigits: 0,
                                 }).format(price)}
                               </span>
-                              <span className="text-[12px] font-regular text-[#6b7280]">/mese</span>
+                              <span className="text-[12px] font-regular text-[#6b7280]">
+                                /{plan.interval === "year" ? "anno" : "mese"}
+                              </span>
                             </div>
                             <ul className="mt-4 flex flex-col gap-2.5">
                               {(plan.features ?? []).map((feature) => (
@@ -2411,7 +2740,9 @@ export default function ImpostazioniPage() {
                                   onClick={() => plan._id && void handleChangePlan(plan._id)}
                                   className="w-full rounded-lg border-2 border-[#111827] bg-white py-2.5 text-[12px] font-semibold text-[#111827] hover:cursor-pointer hover:bg-[#fafafa] disabled:cursor-not-allowed disabled:opacity-60"
                                 >
-                                  Seleziona
+                                  {(plan.priceEur ?? 0) > 0
+                                    ? "Attiva Pro · 29 €/mese"
+                                    : "Passa a Starter"}
                                 </button>
                               )}
                             </div>

@@ -21,6 +21,8 @@ export type BusinessInfo = {
   city?: string;
   province?: string;
   region?: string;
+  latitude?: number;
+  longitude?: number;
   email?: string;
   pec?: string;
   phoneNumber?: string;

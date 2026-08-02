@@ -9,6 +9,7 @@ import {
   Menu,
   X,
 } from "lucide-react";
+import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -55,7 +56,7 @@ function SidebarItem({ href, label }: NavItem) {
       : pathname === href || pathname.startsWith(`${href}/`));
 
   return (
-    <a
+    <Link
       href={href}
       className={clsx(
         "group relative block overflow-hidden rounded-md transition-colors hover:cursor-pointer",
@@ -85,7 +86,7 @@ function SidebarItem({ href, label }: NavItem) {
           {label}
         </span>
       </div>
-    </a>
+    </Link>
   );
 }
 
@@ -245,7 +246,7 @@ export function Sidebar() {
       <div className="px-4 pb-6 lg:hidden">
         <SectionLabel>RAPIDO</SectionLabel>
         <div className="space-y-1.5">
-          <a
+          <Link
             href="/dashboard/notifiche"
             className="group relative block overflow-hidden rounded-md px-4 py-3 text-white/80 transition-colors hover:cursor-pointer hover:bg-white/10 hover:text-white"
           >
@@ -253,7 +254,7 @@ export function Sidebar() {
               <Bell className="h-4 w-4" />
               Notifiche
             </span>
-          </a>
+          </Link>
         </div>
       </div>
 

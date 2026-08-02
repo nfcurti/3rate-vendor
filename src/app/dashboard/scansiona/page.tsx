@@ -18,9 +18,15 @@ import {
 } from "@/lib/business-articles";
 import type { ProductCategory } from "@/lib/business-info";
 import { uploadBusinessImage } from "@/lib/business-info";
+import {
+  businessStripeApi,
+  isStripeConnectReady,
+  STRIPE_REQUIRED_FOR_PRODUCT_MESSAGE,
+} from "@/lib/business-stripe";
 import { DashboardViewHeader } from "../_components/DashboardViewHeader";
 import { FormDropdown, type FormDropdownOption } from "../_components/FormDropdown";
 import { Sidebar } from "../_components/Sidebar";
+import { StripeConnectRequiredNotice } from "../_components/StripeConnectRequiredNotice";
 import { ViewTransition } from "../_components/ViewTransition";
 
 const STATUS_OPTIONS: FormDropdownOption[] = [
@@ -100,6 +106,7 @@ export default function ScansionaAggiungiPage() {
   const [shippingOptions, setShippingOptions] = useState<ShippingOption[]>([]);
   const [metaLoading, setMetaLoading] = useState(true);
   const [publishing, setPublishing] = useState(false);
+  const [stripeReady, setStripeReady] = useState<boolean | null>(null);
   const [statusMessage, setStatusMessage] = useState<{
     message: string;
     tone: "error" | "success";
@@ -222,13 +229,15 @@ export default function ScansionaAggiungiPage() {
     async function loadMeta() {
       setMetaLoading(true);
       try {
-        const [categoriesPayload, shippingPayload] = await Promise.all([
+        const [categoriesPayload, shippingPayload, stripeStatus] = await Promise.all([
           businessArticlesApi.getCategories(),
           getShippingOptions(),
+          businessStripeApi.getConnectStatus().catch(() => null),
         ]);
         if (cancelled) return;
         setCategories(categoriesPayload);
         setShippingOptions(shippingPayload);
+        setStripeReady(isStripeConnectReady(stripeStatus));
         if (categoriesPayload[0]?._id) setCategoryId(categoriesPayload[0]._id);
         if (shippingPayload[0]?._id) setShippingOptionId(shippingPayload[0]._id);
       } catch (error) {
@@ -274,6 +283,10 @@ export default function ScansionaAggiungiPage() {
     setStatusMessage(null);
 
     try {
+      if (stripeReady !== true) {
+        throw new Error(STRIPE_REQUIRED_FOR_PRODUCT_MESSAGE);
+      }
+
       const price = parseNumber(salePrice);
       const stock = parseNumber(stockQuantity);
       const description = [productName.trim(), shortDescription.trim(), fullDescription.trim()]
@@ -337,6 +350,11 @@ export default function ScansionaAggiungiPage() {
           <DashboardViewHeader title="Aggiungi nuovo prodotto" />
 
           <div className="mx-auto w-full max-w-6xl px-4 py-7 lg:px-8">
+            {stripeReady === false ? (
+              <div className="mb-4">
+                <StripeConnectRequiredNotice />
+              </div>
+            ) : null}
             {statusMessage ? (
               <p
                 className={clsx(
@@ -705,10 +723,15 @@ export default function ScansionaAggiungiPage() {
               </aside>
             </div>
 
-            <div className="mt-10 flex justify-end border-t border-black/5 pt-6">
+            <div className="mt-10 flex flex-col items-end gap-3 border-t border-black/5 pt-6">
+              {stripeReady === false ? (
+                <p className="w-full text-right text-[12px] font-semibold text-red-600">
+                  {STRIPE_REQUIRED_FOR_PRODUCT_MESSAGE}
+                </p>
+              ) : null}
               <button
                 type="button"
-                disabled={publishing || metaLoading}
+                disabled={publishing || metaLoading || stripeReady !== true}
                 onClick={() => void handlePublish()}
                 className="inline-flex h-12 min-w-[180px] items-center justify-center gap-2 rounded-xl bg-[#214e3a] px-8 text-[13px] font-semibold text-white hover:cursor-pointer hover:bg-[#1c4332] disabled:cursor-not-allowed disabled:opacity-60"
               >
