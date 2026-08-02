@@ -151,13 +151,13 @@ export default function DashboardPage() {
     setDashboardLoading(true);
     setDashboardError(null);
 
+    // Critical path only — never block first paint on Stripe-backed payments APIs
+    // (summary/payouts have historically hung for minutes and gated the whole view).
     const [
       ordersResult,
       statusesResult,
       articlesResult,
       returnsResult,
-      summaryResult,
-      payoutsResult,
       announcementsResult,
       analyticsResult,
       categoriesResult,
@@ -166,20 +166,14 @@ export default function DashboardPage() {
       getShippingStatuses(),
       businessArticlesApi.getListings(),
       businessOrdersApi.getReturns({ limit: 1 }),
-      businessPaymentsApi.getSummary(),
-      businessPaymentsApi.getPayouts(),
       businessAnnouncementsApi.list(),
       businessArticlesApi.getAnalytics(),
       businessArticlesApi.getCategories(),
     ]);
 
-    const failures = [
-      ordersResult,
-      statusesResult,
-      articlesResult,
-      returnsResult,
-      summaryResult,
-    ].filter((result) => result.status === "rejected");
+    const failures = [ordersResult, statusesResult, articlesResult, returnsResult].filter(
+      (result) => result.status === "rejected"
+    );
 
     if (failures.length) {
       setDashboardError(
@@ -198,8 +192,6 @@ export default function DashboardPage() {
         returnsResult.status === "fulfilled"
           ? returnsResult.value
           : { items: [], pagination: { page: 1, limit: 0, total: 0, totalPages: 1 } };
-      const summaryPayload = summaryResult.status === "fulfilled" ? summaryResult.value : {};
-      const payoutsPayload = payoutsResult.status === "fulfilled" ? payoutsResult.value : [];
       const announcementsPayload =
         announcementsResult.status === "fulfilled" ? announcementsResult.value : [];
       const analyticsPayload =
@@ -213,14 +205,6 @@ export default function DashboardPage() {
       const orders = extractOrdersFromList(ordersPayload.items);
       setOrderStats(computeOrderDashboardStats(orders, statuses));
       setReturnsCount(returnsPayload.pagination.total);
-
-      const earnings = getSummaryNetEarnings(summaryPayload);
-      setTotalEarnings(formatEuroAmount(earnings));
-
-      setLatestPayouts(Array.isArray(payoutsPayload) ? payoutsPayload.slice(0, 2) : []);
-      const chart = (summaryPayload as { salesChart?: Array<{ month: string; amount: number }> })
-        ?.salesChart;
-      setSalesChart(Array.isArray(chart) ? chart : []);
       setAnnouncements(Array.isArray(announcementsPayload) ? announcementsPayload.slice(0, 3) : []);
 
       const activeArticles = articles.filter((article) => article.isActive);
@@ -249,13 +233,35 @@ export default function DashboardPage() {
       setActiveListingsCount(0);
       setProductRows([]);
       setReturnsCount(0);
-      setTotalEarnings("—");
-      setSalesChart([]);
       setAnnouncements([]);
-      setLatestPayouts([]);
     } finally {
       setDashboardLoading(false);
     }
+
+    // Deferred: Stripe Connect may be slow/unavailable — fill earnings/payouts when ready.
+    void Promise.allSettled([
+      businessPaymentsApi.getSummary(),
+      businessPaymentsApi.getPayouts(),
+    ]).then(([summaryResult, payoutsResult]) => {
+      if (summaryResult.status === "fulfilled") {
+        const summaryPayload = summaryResult.value;
+        const earnings = getSummaryNetEarnings(summaryPayload);
+        setTotalEarnings(formatEuroAmount(earnings));
+        const chart = (summaryPayload as { salesChart?: Array<{ month: string; amount: number }> })
+          ?.salesChart;
+        setSalesChart(Array.isArray(chart) ? chart : []);
+      } else {
+        setTotalEarnings("—");
+        setSalesChart([]);
+      }
+
+      if (payoutsResult.status === "fulfilled") {
+        const payoutsPayload = payoutsResult.value;
+        setLatestPayouts(Array.isArray(payoutsPayload) ? payoutsPayload.slice(0, 2) : []);
+      } else {
+        setLatestPayouts([]);
+      }
+    });
   }, []);
 
   useEffect(() => {
