@@ -117,7 +117,6 @@ export default function ScansionaAggiungiPage() {
   const [catalogVisible, setCatalogVisible] = useState(true);
   const [featured, setFeatured] = useState(false);
 
-  const [barcodeLookupLoading, setBarcodeLookupLoading] = useState(false);
   const [uploadedImages, setUploadedImages] = useState<UploadedImage[]>([]);
   const [isDragActive, setIsDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -270,37 +269,6 @@ export default function ScansionaAggiungiPage() {
     return row?.selectedValue?.trim() ?? "";
   }
 
-  async function handleBarcodeLookup() {
-    const barcode =
-      typeof window !== "undefined"
-        ? window.prompt("Inserisci barcode / EAN", "")?.trim()
-        : "";
-    if (!barcode) return;
-
-    setBarcodeLookupLoading(true);
-    setStatusMessage(null);
-
-    try {
-      const result = await businessArticlesApi.lookupBarcode(barcode);
-      const name =
-        (typeof result.name === "string" && result.name) ||
-        (typeof result.description === "string" && result.description) ||
-        "";
-      if (name) setProductName(name);
-      if (typeof result.shortDescription === "string") setShortDescription(result.shortDescription);
-      if (typeof result.fullDescription === "string") setFullDescription(result.fullDescription);
-
-      setStatusMessage({
-        message: name ? "Dati prodotto caricati dal barcode." : "Barcode trovato.",
-        tone: "success",
-      });
-    } catch (error) {
-      setStatusMessage({ message: formatApiErrorMessage(error), tone: "error" });
-    } finally {
-      setBarcodeLookupLoading(false);
-    }
-  }
-
   async function handlePublish() {
     setPublishing(true);
     setStatusMessage(null);
@@ -379,38 +347,6 @@ export default function ScansionaAggiungiPage() {
                 {statusMessage.message}
               </p>
             ) : null}
-
-            <div className="rounded-xl bg-[#214e3a] px-6 py-6 text-white shadow-[0_12px_28px_rgba(16,24,16,0.12)]">
-              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 text-2xl font-bold tracking-tight">
-                    Scansiona Barcode/QR Code
-                  </div>
-                  <p className="mt-2 max-w-xl text-sm font-regular leading-relaxed text-white/75">
-                    Inquadra un codice a barre o un QR: recupereremo automaticamente nome, SKU e
-                    attributi quando disponibili.
-                  </p>
-                </div>
-              </div>
-              <div className="mt-6 flex justify-center sm:justify-end">
-                <button
-                  type="button"
-                  disabled={barcodeLookupLoading}
-                  onClick={() => void handleBarcodeLookup()}
-                  className="inline-flex h-11 shrink-0 items-center justify-end rounded-lg bg-[#76C043] px-18 py-3 text-sm font-semibold text-[#14311f] hover:cursor-pointer hover:bg-[#6aad3c] disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {barcodeLookupLoading ? "Ricerca..." : "Avvia scanner"}
-                </button>
-              </div>
-            </div>
-       
-
-            <div className="relative my-8 flex items-center justify-center">
-              <div className="h-px w-full bg-[#dfe4df]" />
-              <span className="absolute bg-[#f3f5f2] px-4 text-[10px] font-regular tracking-widest text-[#6B7280]">
-                OPPURE INSERISCI MANUALMENTE
-              </span>
-            </div>
 
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_270px] lg:items-start">
               <div className="min-w-0 space-y-4">

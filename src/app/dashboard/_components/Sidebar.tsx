@@ -30,7 +30,7 @@ const primary: NavItem[] = [
 ];
 
 const operations: NavItem[] = [
-  { href: "/dashboard/scansiona", label: "Scansiona & aggiungi" },
+  { href: "/dashboard/scansiona", label: "Aggiungi prodotto" },
 ];
 
 const support: NavItem[] = [

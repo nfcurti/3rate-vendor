@@ -541,27 +541,15 @@ export default function DashboardPage() {
                 Aggiungi prodotto
               </div>
               <p className="mt-2 text-sm leading-snug text-white/75">
-                Scansiona il codice a barre o il QR code del prodotto per
-                aggiungerlo immediatamente al tuo inventario.
+                Crea un nuovo articolo per il tuo catalogo: nome, prezzo, stock e immagini.
               </p>
 
-              <div className=" flex items-center justify-center rounded-2xl  ">
-                <div className="relative">
-                  <div className="pointer-events-none absolute inset-0 -z-10 rounded-2xl " />
-                  <img
-                    src="/dashboard/qr.png"
-                    alt="QR"
-                    className="size-70 object-contain"
-                  />
-                </div>
-              </div>
-
-              <button
-                type="button"
+              <Link
+                href="/dashboard/scansiona"
                 className="mt-5 inline-flex h-11 w-full items-center justify-center rounded-xl bg-[#5DBE54] text-sm font-semibold text-[#14311f] shadow-[0_10px_20px_rgba(0,0,0,0.18)] hover:cursor-pointer hover:bg-[#56b14f] active:translate-y-px"
               >
-                Avvia scanner
-              </button>
+                Aggiungi prodotto
+              </Link>
             </div>
           </section>
 

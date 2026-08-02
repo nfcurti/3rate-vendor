@@ -87,7 +87,7 @@ export default function Home() {
                     Gestione inventario semplice
                   </div>
                   <div className="mt-1 text-xs text-white/70">
-                    Aggiungi prodotti con la scansione di QR e barcode.
+                    Aggiungi prodotti al tuo catalogo e gestisci lo stock.
                   </div>
                 </div>
                 <div>
