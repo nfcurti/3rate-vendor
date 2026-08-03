@@ -6,6 +6,7 @@ export type StripeConnectStatus = {
   accountId?: string;
   chargesEnabled?: boolean;
   payoutsEnabled?: boolean;
+  needsReconnect?: boolean;
 };
 
 export type StripeConnectOnboardPayload = {

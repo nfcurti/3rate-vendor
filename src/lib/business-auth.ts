@@ -81,8 +81,11 @@ type BackendSuccess<T> = {
 
 type BackendFailure = {
   error: string;
+  message?: string;
   path?: string;
   method?: string;
+  stripeType?: string;
+  stripeCode?: string;
 };
 
 export type AuthSession = {
@@ -123,8 +126,7 @@ const errorMessages: Record<string, string> = {
   OPTIONS_FAILED: "Impossibile caricare le opzioni di spedizione.",
   NOT_FOUND: "Risorsa non trovata.",
   NOT_VALIDATED_ACCOUNT: "Account non ancora verificato.",
-  UNKNOWN_ERROR:
-    "Operazione non riuscita. Se stai collegando Stripe, verifica che STRIPE_SECRET_KEY sia configurata sul backend.",
+  UNKNOWN_ERROR: "Operazione non riuscita. Riprova tra poco.",
 };
 
 const getErrorMessage = (error: string) =>
@@ -228,6 +230,17 @@ export async function payohRequest<T>(
   const handleFailure = (data: BackendSuccess<T> | BackendFailure) => {
     if ("error" in data && data.error === "INVALID_TOKEN" && typeof window !== "undefined") {
       clearBusinessSession();
+    }
+
+    if ("error" in data && typeof data.message === "string" && data.message.trim()) {
+      // Prefer backend detail for Stripe/config failures (UNKNOWN_ERROR is too generic).
+      if (
+        data.error === "UNKNOWN_ERROR" ||
+        data.error === "API_NOT_CONFIGURED" ||
+        data.error === "INTERNAL_SERVER_ERROR"
+      ) {
+        throw new Error(data.message.trim());
+      }
     }
 
     throw new Error(getErrorMessage("error" in data ? data.error : ""));
